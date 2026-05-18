@@ -1,11 +1,9 @@
-# Miniapps Boilerplate
+# Embedded Miniapps Boilerplate
 
-A minimal **Next.js 16 + shadcn/ui + TypeScript** starter for building [Circles](https://aboutcircles.com) miniapps. It wires up:
+A minimal **Next.js 16 + shadcn/ui + TypeScript** starter for building [Circles](https://aboutcircles.com) embedded miniapps. It wires up:
 
 - [`@aboutcircles/miniapp-sdk`](https://www.npmjs.com/package/@aboutcircles/miniapp-sdk) — host-injected wallet, transaction submission, message signing
 - [`@aboutcircles/sdk`](https://www.npmjs.com/package/@aboutcircles/sdk) — read-only Circles data (avatar lookup, profile, balances, trust graph)
-
-Inspired by [aboutcircles/circles-groups-miniapp](https://github.com/aboutcircles/circles-groups-miniapp), this template extracts the foundational miniapp patterns (wallet subscription, message signing, profile lookup, transaction submission) into a modern App Router project so you can focus on your app's logic, not the wiring.
 
 ## Quickstart
 
