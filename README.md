@@ -44,7 +44,7 @@ The [Circles playground](https://circles.gnosis.io/playground) iframes any HTTPS
 2. Open `https://circles.gnosis.io/playground` and paste your deploy URL into the input, **or** open `https://circles.gnosis.io/playground?url=<your-deploy-url>` directly.
 3. The host injects a Safe address, the badge in the header flips to a shortened address, and the *Sign in* / `sendTransactions` flows start working end-to-end.
 
-[`next.config.ts`](next.config.ts) ships with a `Content-Security-Policy: frame-ancestors` header pre-allowing `circles.gnosis.io` and `*.vercel.app`. If you deploy to a different host, add it there.
+[`next.config.ts`](next.config.ts) ships with a `Content-Security-Policy: frame-ancestors` header pre-allowing `*.gnosis.io` (covers both `circles.gnosis.io` prod and `circles-dev.gnosis.io` dev hosts) and `*.vercel.app`. If you deploy to a different host, add it there.
 
 #### Listing in the marketplace
 

@@ -2,10 +2,10 @@ import type { NextConfig } from "next";
 
 // The Circles host loads miniapps inside an iframe. Default Next.js responses
 // would block that with `X-Frame-Options: SAMEORIGIN`, so we explicitly allow
-// the Circles playground/marketplace and any Vercel preview deploy.
+// the Circles host (prod + dev + any future subdomain) and Vercel preview deploys.
 const FRAME_ANCESTORS = [
   "'self'",
-  "https://circles.gnosis.io",
+  "https://*.gnosis.io",
   "https://*.vercel.app",
 ].join(" ");
 
