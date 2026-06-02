@@ -1,22 +1,63 @@
-import Link from 'next/link';
+"use client";
 
-import { CirclesLogo } from '@/components/brand/CirclesLogo';
-import { CurrentPage } from '@/components/layout/CurrentPage';
-import { MobileNav } from '@/components/layout/MobileNav';
-import { WalletStatus } from '@/components/wallet/WalletStatus';
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { Settings } from "lucide-react";
+
+import { useWallet } from "@/components/wallet/WalletProvider";
+import { useSession } from "@/hooks/use-session";
+import { cn } from "@/lib/utils";
 
 export function Header() {
+  const pathname = usePathname();
+  const { address, isConnected } = useWallet();
+  const { data } = useSession((address as `0x${string}` | null) ?? null);
+  const showSecondary = !!data?.session && !!data?.attendee;
+  const onSettings = pathname.startsWith("/settings");
+
   return (
-    <header className="col-span-full flex h-14 items-center justify-between border-b bg-background px-4">
-      <div className="flex items-center gap-2">
-        <MobileNav />
-        <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
-          <CirclesLogo width={28} height={28} />
-          <span className="hidden sm:inline">Miniapp Boilerplate</span>
+    <header className="bg-canvas">
+      <div className="mx-auto flex h-16 max-w-3xl items-center justify-between gap-4 px-5 sm:px-8">
+        <Link
+          href="/"
+          className="flex items-center gap-2 text-base font-semibold tracking-tight"
+        >
+          <span
+            aria-hidden
+            className="inline-block size-7 rounded-md bg-brand"
+          />
+          Dappcon Chat
         </Link>
-        <CurrentPage />
+        <div className="flex items-center gap-2">
+          {showSecondary && (
+            // Pressing the settings button while ON /settings pops you back to
+            // /wall — matches the toggle expectation users have.
+            <Link
+              href={onSettings ? "/wall" : "/settings"}
+              aria-label={onSettings ? "Close settings" : "Settings"}
+              aria-pressed={onSettings}
+              title={onSettings ? "Close settings" : "Settings"}
+              className={cn(
+                "inline-flex size-11 items-center justify-center rounded-full transition-colors",
+                onSettings
+                  ? "bg-ink text-surface"
+                  : "bg-surface text-ink hover:bg-hairline",
+              )}
+            >
+              <Settings className="size-5" />
+            </Link>
+          )}
+          {!isConnected && (
+            <span className="ml-2 inline-flex items-center gap-1.5 text-sm text-ink-muted">
+              <span
+                className="inline-block size-1.5 rounded-full bg-ink-muted/40"
+                aria-hidden
+              />
+              Not connected
+            </span>
+          )}
+        </div>
       </div>
-      <WalletStatus />
     </header>
   );
 }

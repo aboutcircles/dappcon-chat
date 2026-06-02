@@ -1,170 +1,56 @@
-# Embedded Miniapps Boilerplate
+# Conference DM
 
-A minimal **Next.js 16 + shadcn/ui + TypeScript** starter for building [Circles](https://aboutcircles.com) embedded miniapps. It wires up:
+A Circles miniapp for conference attendees: a shared wall and 1:1 DMs, filtered by the Circles trust graph.
 
-- [`@aboutcircles/miniapp-sdk`](https://www.npmjs.com/package/@aboutcircles/miniapp-sdk) — host-injected wallet, transaction submission, message signing
-- [`@aboutcircles/sdk`](https://www.npmjs.com/package/@aboutcircles/sdk) — read-only Circles data (avatar lookup, profile, balances, trust graph)
+Built on top of the [`embedded-miniapp-boilerplate`](https://github.com/aboutcircles/embedded-miniapp-boilerplate) (Next.js 16 App Router + TypeScript + shadcn/ui + Tailwind v4 + pnpm). See [`AGENTS.md`](AGENTS.md) for the boilerplate's SDK rules and styling conventions — they still apply.
 
-## Quickstart
+## What it does
+
+| Surface | Behaviour |
+| --- | --- |
+| `/` | Landing. If no Circles wallet → instructions to onboard (magic-link placeholder). If wallet → "Sign in with Circles" (one EIP-1271 signature, no gas). |
+| `/register` | Pick in-person vs. online; add optional bio + interests. |
+| `/wall` | Composer + feed. Each post shows the author's Circles profile. Toggle the **hop filter** to scope the feed to people within N trust-graph hops. |
+| `/people` | Directory of registered attendees, badged by hop distance and attendance mode. |
+| `/people/[address]` | Profile detail. Shows **Open conversation** if you're within the recipient's DM-hop range, otherwise an explainer. |
+| `/dms` & `/dms/[address]` | Conversation list + 1:1 thread with auto-poll. |
+| `/settings` | Two sliders: `feedHops` (your wall filter) and `dmHops` (the max distance someone can be and still DM you). Default 2 each, capped at 6. |
+
+## Architecture
+
+- **Auth** — host injects the wallet via `@aboutcircles/miniapp-sdk`; sign-in is a SIWE-style message signed with `signMessage`, verified server-side via viem's `verifyMessage` against Gnosis Chain (EIP-1271). Success sets an HMAC-signed `httpOnly` session cookie keyed to the Safe address.
+- **Trust graph** — `lib/trust.ts` walks an undirected BFS using `rpc.trust.getTrusts` + `rpc.trust.getTrustedBy`, with per-address neighbour caching (60s TTL). Hop counts are bounded by each call's `maxHops` so we never traverse the whole graph.
+- **Profiles** — `lib/profile-fetch.ts` reads `getProfileView` + `getProfileByCid` and caches the merged card for 5 min.
+- **Storage** — `lib/store.ts` is a JSON-file-backed store at `/tmp/dmdappcon-data.json` (override with `DATA_FILE`). Tables: `attendees`, `settings`, `posts`, `dms`. Replace with Vercel KV / Neon / Upstash before going multi-region.
+- **DM privacy** — messages are stored server-side in v0 (private to the conversation pair, gated by hop distance on each send). End-to-end encryption via XMTP is on the roadmap; see [`xmtp-circles-miniapp`](https://github.com/zengzengzenghuy/xmtp-circles-miniapp) for the reference integration.
+
+## Environment
+
+```bash
+# Required in production. Dev falls back to an ephemeral secret.
+SESSION_SECRET=<32+ char random string>
+
+# Optional override for the JSON store path.
+DATA_FILE=/var/lib/dmdappcon/data.json
+
+# Optional override for the Gnosis Chain RPC used during sign-in verification.
+GNOSIS_RPC_URL=https://rpc.gnosischain.com
+```
+
+## Running
 
 ```bash
 pnpm install
-pnpm dev
+pnpm dev          # http://localhost:3000
+pnpm build        # production build (Turbopack)
+pnpm lint
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The dashboard renders with a sidebar of placeholder routes and a "Not connected" badge — that is expected outside the Circles host.
+The standalone `pnpm dev` view shows "disconnected" — that's expected. Test inside the host iframe at `https://circles.gnosis.io/playground?url=<your-https-url>`.
 
-## How wallet connection works
+## Stubs / known gaps
 
-The Circles host runs your miniapp inside an iframe and **pushes the wallet address to you** — there is no "Connect" button click flow. The SDK exposes one subscription primitive:
-
-```ts
-import { onWalletChange } from '@aboutcircles/miniapp-sdk';
-
-const unsubscribe = onWalletChange((address) => {
-  // address is the Safe address the user picked in the host, or null on disconnect.
-});
-```
-
-`components/wallet/WalletProvider.tsx` wraps this in a React context. Anywhere in a client component you can do:
-
-```tsx
-import { useWallet } from '@/hooks/use-wallet';
-
-const { address, isConnected, isMiniappHost } = useWallet();
-```
-
-Running standalone (`pnpm dev` in a normal browser tab), `isMiniappHost` is `false` and the callback never fires — the UI stays disconnected. This is by design; the SDK ships with no fallback wallet because Circles miniapps are always wallet-injected by the host.
-
-### Testing inside the Circles playground
-
-The [Circles playground](https://circles.gnosis.io/playground) iframes any HTTPS URL you paste into it — no manifest, registration, or fork required.
-
-1. Deploy the app to a public HTTPS URL (Vercel preview deploys work great: `git push` → grab the `https://*.vercel.app` URL).
-2. Open `https://circles.gnosis.io/playground` and paste your deploy URL into the input, **or** open `https://circles.gnosis.io/playground?url=<your-deploy-url>` directly.
-3. The host injects a Safe address, the badge in the header flips to a shortened address, and the *Sign in* / `sendTransactions` flows start working end-to-end.
-
-[`next.config.ts`](next.config.ts) ships with a `Content-Security-Policy: frame-ancestors` header pre-allowing `*.gnosis.io` (covers both `circles.gnosis.io` prod and `circles-dev.gnosis.io` dev hosts) and `*.vercel.app`. If you deploy to a different host, add it there.
-
-#### Listing in the marketplace
-
-For permanent placement in the host's catalog, open a PR against [`aboutcircles/CirclesMiniapps`](https://github.com/aboutcircles/CirclesMiniapps) adding an entry to `static/miniapps.json`:
-
-```json
-{
-  "slug": "your-app",
-  "name": "Your App",
-  "url": "https://your-app.example.com/",
-  "logo": "https://your-app.example.com/icon.svg",
-  "description": "One-liner.",
-  "tags": ["demo"],
-  "isHidden": false
-}
-```
-
-## Signing in (message signing)
-
-The host can ask the user's Safe to sign an arbitrary message via EIP-1271. The dashboard's *Sign in* card demonstrates the full round-trip:
-
-```ts
-'use client';
-import { signMessage } from '@aboutcircles/miniapp-sdk';
-
-const { signature, verified } = await signMessage(
-  'Sign in to my miniapp\nNonce: abc123',
-);
-```
-
-`verified` reflects whether the host already validated the signature against the user's Safe; you can re-verify server-side before issuing a session cookie. See [`components/wallet/SignInDemo.tsx`](components/wallet/SignInDemo.tsx).
-
-## Looking up a Circles profile
-
-The [`@aboutcircles/sdk`](https://www.npmjs.com/package/@aboutcircles/sdk) package provides a higher-level, read-friendly client. The `/profile` route uses its consolidated **profile view** endpoint to pull avatar info, name, trust stats, and balances for the connected address in a single call:
-
-```ts
-'use client';
-import { Sdk } from '@aboutcircles/sdk';
-
-const sdk = new Sdk(); // defaults to Gnosis Chain mainnet
-const view = await sdk.rpc.profile.getProfileView(address);
-// → { avatarInfo?, profile?, trustStats, v2Balance?, v1Balance? }
-
-if (view.avatarInfo?.cidV0) {
-  // optionally pull the full IPFS profile for richer fields (description, image)
-  const full = await sdk.rpc.profile.getProfileByCid(view.avatarInfo.cidV0);
-}
-```
-
-**Why `getProfileView` and not `sdk.getAvatar()`?** `getAvatar()` is the right call when you need a write-capable `Avatar` instance (trust, transfer, mint). For read-only lookups it can throw a misleading "Avatar not found" error even on valid avatars whose on-chain `cidV0Digest` is empty. `getProfileView()` is the read primitive and degrades gracefully — it returns `avatarInfo: undefined` for addresses that aren't Circles avatars.
-
-For write flows, fall back to `sdk.getAvatar(address)` once the user has both a wallet and a registered avatar; the same object exposes `balances`, `trust`, `history`, `transfer`. See [`components/profile/ProfileLookup.tsx`](components/profile/ProfileLookup.tsx).
-
-## Sending transactions
-
-```ts
-'use client';
-import { sendTransactions } from '@aboutcircles/miniapp-sdk';
-
-const txHashes = await sendTransactions([
-  { to: '0x…', data: '0x…', value: '0' },
-]);
-```
-
-The host batches and signs through the user's Safe and returns the resulting tx hashes.
-
-## Project layout
-
-```
-app/
-  layout.tsx              Root: wraps every page in <WalletProvider><AppShell>
-  page.tsx                Dashboard — connection card, sign-in demo, nav cards
-  profile/page.tsx        Circles avatar lookup via @aboutcircles/sdk
-  actions/page.tsx        Placeholder (where sendTransactions demos go)
-  globals.css             Tailwind v4 + shadcn tokens (light only)
-components/
-  layout/                 AppShell, Header, Sidebar, NavCards
-  wallet/                 WalletProvider, WalletStatus, ConnectionCard, SignInDemo
-  profile/                ProfileLookup (uses @aboutcircles/sdk)
-  ui/                     shadcn-generated primitives
-hooks/use-wallet.ts       Re-export of useWallet
-lib/
-  utils.ts                cn() + shortenAddress()
-  nav.ts                  Sidebar nav items (single source of truth)
-```
-
-## Where to add business logic
-
-- **Read-only flows** (profile, balance, trust graph) — call `useWallet()` to get the address, then drive `@aboutcircles/sdk` from a client component. See `ProfileLookup` for the pattern.
-- **Write flows** — keep `sendTransactions()` calls inside `'use client'` components; build the calldata however you like (viem, ethers, or hand-encoded).
-- **Authentication** — call `signMessage()` to sign a SIWE-style nonce; re-verify the signature on your backend. See `SignInDemo`.
-- **New routes** — drop a `page.tsx` under `app/<route>/` and add an entry to `lib/nav.ts` to expose it in the sidebar.
-
-## Scripts
-
-| Command       | What it does                       |
-| ------------- | ---------------------------------- |
-| `pnpm dev`    | Start the dev server on `:3000`    |
-| `pnpm build`  | Production build                   |
-| `pnpm start`  | Run the built app                  |
-| `pnpm lint`   | ESLint                             |
-
-## Gotchas
-
-- **Both SDKs touch `window`.** They must be dynamically imported inside a client component's `useEffect` — `WalletProvider` and `ProfileLookup` already do this. Don't import them at the top level of a server component or you'll see `window is not defined` during build.
-- **No connect button.** If you find yourself adding one, you're working around the wrong problem — the host is the wallet UI.
-- **`getAvatar` throws for unregistered addresses.** Most EOAs aren't Circles avatars. The `/profile` page surfaces this as a friendly error; don't treat it as a bug.
-- **Light mode only.** The dark-mode CSS variables are stripped from `globals.css`. If you re-add dark mode later, restore the `.dark { … }` block and the `@custom-variant dark` directive, then add `next-themes`.
-- **Tailwind v4.** No `tailwind.config.js`; theme tokens live in `app/globals.css` under `@theme inline { … }`.
-
-## Learn more
-
-- [**Embedded miniapps** — official Circles docs](https://docs.aboutcircles.com/miniapps/embedded-mini-apps) — the host/iframe contract, lifecycle, postMessage protocol, and what's coming next. Start here if you want to understand *why* the SDK is shaped the way it is.
-- [Circles playground](https://circles.gnosis.io/playground) — paste a URL, iframe it as a miniapp
-- [`aboutcircles/CirclesMiniapps`](https://github.com/aboutcircles/CirclesMiniapps) — host repo; submit a PR to `static/miniapps.json` for marketplace listing
-- [`@aboutcircles/miniapp-sdk` on npm](https://www.npmjs.com/package/@aboutcircles/miniapp-sdk) — host bridge (wallet, signing, transactions)
-- [`@aboutcircles/sdk` on npm](https://www.npmjs.com/package/@aboutcircles/sdk) — Circles data (avatars, profiles, balances, trust)
-- [`aboutcircles/circles-groups-miniapp`](https://github.com/aboutcircles/circles-groups-miniapp) — the original (vanilla JS + Vite) reference miniapp this template draws from
-
-## License
-
-MIT
+- **Magic-link onboarding** — the landing page links to `app.metri.xyz` as a placeholder. Swap in the conference's magic-link URL once available.
+- **Proof of presence** — in-person attendees are taken at their word. Add a venue-bound check (geofence, QR scan, Safe-signed event token) when needed.
+- **Storage** — JSON file at `/tmp` is wiped on container restart. Move to a managed store before any real conference use.
+- **E2E encryption** — DMs are TLS-private but server-readable. XMTP integration is the planned next step.

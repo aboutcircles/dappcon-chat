@@ -5,22 +5,11 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla";
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
+
+  /* shadcn token mappings → design-system tokens */
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -37,58 +26,93 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* Design-system colors (DESIGN_SYSTEM.md) */
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-hairline: var(--hairline);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-brand: var(--brand);
+  --color-brand-press: var(--brand-press);
+  --color-brand-tint: var(--brand-tint);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-tag-social: var(--tag-social);
+  --color-tag-infra: var(--tag-infra);
+  --color-tag-app: var(--tag-app);
+
+  /* Radii (DESIGN_SYSTEM.md) */
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-3xl: 28px;
+  --radius-4xl: 9999px;
+
+  /* Shadows */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.05);
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  /* — Design-system tokens (see DESIGN_SYSTEM.md) — */
+  --canvas: #f0efe9;      /* warm off-white page bg */
+  --surface: #ffffff;     /* cards, raised panels */
+  --hairline: #e3e1d9;
+  --ink: #000000;
+  --ink-muted: #4b4b4b;
+  --brand: #ff4086;        /* hot pink — single accent */
+  --brand-press: #e62e72;
+  --brand-tint: #ffe3ee;
+  --brand-foreground: #ffffff;
+  --tag-social: #ff4086;
+  --tag-infra: #685838;
+  --tag-app: #484848;
+
+  /* shadcn shims → design system */
+  --background: var(--canvas);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--ink);
+  --primary-foreground: var(--surface);
+  --secondary: var(--hairline);
+  --secondary-foreground: var(--ink);
+  --muted: var(--hairline);
+  --muted-foreground: var(--ink-muted);
+  --accent: var(--hairline);
+  --accent-foreground: var(--ink);
+  --destructive: #e8364d;
+  --border: var(--hairline);
+  --input: var(--hairline);
+  --ring: var(--brand);
+  --radius: 14px;
 }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring/30;
+  }
+  html {
+    font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif,
+      "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+    /* Stops iOS Safari (and the Circles host iframe) from treating horizontal
+       swipes on body as page panning. Vertical scrolling still works. */
+    touch-action: pan-y;
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
   }
   body {
     @apply bg-background text-foreground;
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
   }
-  html {
-    @apply font-sans;
+  /* Interactive controls that need horizontal pointer/touch gestures must
+     opt back in (sliders, scroll-areas). */
+  [data-slot="slider"],
+  [data-slot="slider"] * {
+    touch-action: none;
   }
 }

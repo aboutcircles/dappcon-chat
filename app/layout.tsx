@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 
 import { AppShell } from "@/components/layout/AppShell";
+import { Toaster } from "@/components/ui/sonner";
 import { WalletProvider } from "@/components/wallet/WalletProvider";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
@@ -16,8 +17,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Miniapp Boilerplate",
-  description: "Next.js + shadcn starter for Circles miniapps",
+  title: "Dappcon Chat",
+  description:
+    "A graph-filtered wall and DMs for Circles users at DappCon 2026.",
 };
 
 export default function RootLayout({
@@ -28,12 +30,13 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${inter.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full">
         <WalletProvider>
           <AppShell>{children}</AppShell>
         </WalletProvider>
+        <Toaster richColors position="top-right" />
       </body>
     </html>
   );

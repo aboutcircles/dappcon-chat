@@ -1,14 +1,14 @@
-import type { ReactNode } from 'react';
+import type { ReactNode } from "react";
 
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
+import { Footer } from "@/components/layout/Footer";
+import { Header } from "@/components/layout/Header";
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="grid min-h-screen grid-rows-[3.5rem_1fr] md:grid-cols-[240px_1fr]">
+    <div className="flex min-h-screen flex-col">
       <Header />
-      <Sidebar />
-      <main className="overflow-auto p-6">{children}</main>
+      <main className="flex-1 px-5 py-10 sm:px-8 sm:py-14">{children}</main>
+      <Footer />
     </div>
   );
 }

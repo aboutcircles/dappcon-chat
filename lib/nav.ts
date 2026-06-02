@@ -1,10 +1,12 @@
 export type NavItem = {
   href: string;
   label: string;
+  requiresSession?: boolean;
 };
 
 export const NAV: NavItem[] = [
-  { href: "/", label: "Dashboard" },
-  { href: "/profile", label: "Profile" },
-  { href: "/actions", label: "Actions" },
+  { href: "/wall", label: "Wall", requiresSession: true },
+  { href: "/people", label: "People", requiresSession: true },
+  { href: "/dms", label: "Messages", requiresSession: true },
+  { href: "/settings", label: "Settings", requiresSession: true },
 ];
