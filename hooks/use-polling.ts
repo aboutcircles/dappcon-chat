@@ -18,7 +18,9 @@ export function usePolling(
   intervalMs: number,
 ) {
   const cbRef = useRef(callback);
-  cbRef.current = callback;
+  useEffect(() => {
+    cbRef.current = callback;
+  }, [callback]);
 
   useEffect(() => {
     if (intervalMs <= 0) return;

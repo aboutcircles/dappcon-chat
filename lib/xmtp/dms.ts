@@ -1,0 +1,203 @@
+"use client";
+
+/**
+ * Thin wrapper around the XMTP browser SDK so React components don't have
+ * to wrestle with the raw types. We expose narrow primitives matching the
+ * Dappcon-Chat use case:
+ *   - list / stream DM conversations
+ *   - load / send / stream messages in a single DM
+ *   - resolve a peer Ethereum address ↔ inboxId
+ *
+ * Behaviour matches the reference repo (zengzengzenghuy/xmtp-circles-miniapp)
+ * — peerInboxId is preferred over addedByInboxId because the latter can
+ * resolve to the connected user on incoming conversations.
+ */
+
+import {
+  ConsentState,
+  type Client,
+  type DecodedMessage,
+  type Dm,
+  IdentifierKind,
+} from "@xmtp/browser-sdk";
+
+import { normalizeAddress } from "@/lib/addr";
+
+export type DmSummary = {
+  conversationId: string;
+  peerInboxId: string;
+  peerAddress: `0x${string}` | null;
+  lastMessageText: string | null;
+  lastMessageSenderInboxId: string | null;
+  lastMessageSentAtNs: bigint;
+  createdAtNs: bigint;
+};
+
+export type ThreadMessage = {
+  id: string;
+  text: string;
+  sentAtNs: bigint;
+  senderInboxId: string;
+  mine: boolean;
+};
+
+const TEXT_CONTENT_TYPE = "xmtp.org/text:1.0";
+
+function getMessageText(msg: DecodedMessage): string {
+  const content = msg.content;
+  if (typeof content === "string") return content;
+  // Non-text messages (reactions, group updates, attachments) are filtered
+  // out at the call site — render as empty if one slips through.
+  return "";
+}
+
+function isText(msg: DecodedMessage): boolean {
+  return msg.contentType?.toString() === TEXT_CONTENT_TYPE;
+}
+
+async function peerAddressOf(conv: Dm): Promise<`0x${string}` | null> {
+  try {
+    const members = await conv.members();
+    const peerInboxId = await conv.peerInboxId().catch(() => null);
+    const peer = peerInboxId
+      ? members.find((m) => m.inboxId === peerInboxId)
+      : null;
+    const id = peer?.accountIdentifiers?.[0]?.identifier;
+    return id ? normalizeAddress(id) : null;
+  } catch (err) {
+    console.warn("[xmtp] peerAddressOf failed:", err);
+    return null;
+  }
+}
+
+export async function summarizeDm(conv: Dm): Promise<DmSummary | null> {
+  try {
+    const [peerInboxId, lastMessage, peerAddress] = await Promise.all([
+      conv.peerInboxId().catch(() => null),
+      conv.lastMessage().catch(() => undefined),
+      peerAddressOf(conv),
+    ]);
+    if (!peerInboxId) return null;
+    const text = lastMessage && isText(lastMessage) ? getMessageText(lastMessage) : null;
+    return {
+      conversationId: conv.id,
+      peerInboxId,
+      peerAddress,
+      lastMessageText: text,
+      lastMessageSenderInboxId: lastMessage?.senderInboxId ?? null,
+      lastMessageSentAtNs: lastMessage?.sentAtNs ?? 0n,
+      createdAtNs: conv.createdAtNs ?? 0n,
+    };
+  } catch (err) {
+    console.warn("[xmtp] summarizeDm failed:", err);
+    return null;
+  }
+}
+
+export async function listAllDms(client: Client): Promise<DmSummary[]> {
+  await client.conversations.sync();
+  const convos = await client.conversations.listDms();
+  const summaries = await Promise.all(convos.map((c) => summarizeDm(c)));
+  return summaries.filter((s): s is DmSummary => s !== null);
+}
+
+export async function fetchInboxIdForAddress(
+  client: Client,
+  address: `0x${string}`,
+): Promise<string | null> {
+  const inboxId = await client.fetchInboxIdByIdentifier({
+    identifier: address.toLowerCase(),
+    identifierKind: IdentifierKind.Ethereum,
+  });
+  return inboxId ?? null;
+}
+
+/**
+ * Returns the existing DM with `peerAddress` or creates one. Returns null if
+ * the peer has no XMTP inbox (never used XMTP).
+ */
+export async function openOrCreateDm(
+  client: Client,
+  peerAddress: `0x${string}`,
+): Promise<Dm | null> {
+  const inboxId = await fetchInboxIdForAddress(client, peerAddress);
+  if (!inboxId) return null;
+  const existing = await client.conversations.getDmByInboxId(inboxId);
+  if (existing) return existing;
+  return client.conversations.createDm(inboxId);
+}
+
+export async function loadThreadMessages(
+  conv: Dm,
+  myInboxId: string,
+): Promise<ThreadMessage[]> {
+  await conv.sync();
+  const raw = await conv.messages({});
+  const out: ThreadMessage[] = [];
+  for (const m of raw) {
+    if (!isText(m)) continue;
+    out.push({
+      id: m.id,
+      text: getMessageText(m),
+      sentAtNs: m.sentAtNs ?? 0n,
+      senderInboxId: m.senderInboxId,
+      mine: m.senderInboxId === myInboxId,
+    });
+  }
+  // Conversation.messages returns newest-first in some SDK versions; sort
+  // explicitly so we don't depend on that.
+  out.sort((a, b) => (a.sentAtNs < b.sentAtNs ? -1 : 1));
+  return out;
+}
+
+export async function sendText(conv: Dm, text: string): Promise<void> {
+  await conv.sync();
+  await conv.sendText(text);
+}
+
+/**
+ * Subscribe to new conversations + last-message changes. Returns a cleanup
+ * function to stop both streams.
+ */
+export async function streamAllDmUpdates(
+  client: Client,
+  onConvChange: (summary: DmSummary) => void,
+  onMessage: (message: DecodedMessage) => void,
+): Promise<() => void> {
+  const convStream = await client.conversations.stream({
+    onValue: async (conv) => {
+      const dm = conv as Dm;
+      if (!dm.peerInboxId) return; // non-DM
+      const s = await summarizeDm(dm);
+      if (s) onConvChange(s);
+    },
+  });
+
+  const msgStream = await client.conversations.streamAllMessages({
+    onValue: (msg) => {
+      onMessage(msg);
+    },
+    consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+  });
+
+  return () => {
+    // Both stream proxies expose .return(); some versions also expose .end().
+    convStream.return?.();
+    msgStream.return?.();
+  };
+}
+
+/** Stream just the messages of one open conversation. */
+export async function streamThread(
+  conv: Dm,
+  onMessage: (message: DecodedMessage) => void,
+): Promise<() => void> {
+  const stream = await conv.stream({
+    onValue: (m) => onMessage(m),
+  });
+  return () => {
+    stream.return?.();
+  };
+}
+
+export { isText as isTextMessage };

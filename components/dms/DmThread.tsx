@@ -1,25 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 
+import { EnableDmsCard } from "@/components/dms/EnableDmsCard";
+import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
+import { ProfileName } from "@/components/profile/ProfileName";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
-import { ProfileName } from "@/components/profile/ProfileName";
-import { usePolling } from "@/hooks/use-polling";
+import { useXmtp } from "@/components/xmtp/XmtpProvider";
+import { useSession } from "@/hooks/use-session";
 import { authedFetch } from "@/lib/api";
-import type { ProfileCard } from "@/lib/profile-fetch";
-import type { DirectMessage } from "@/lib/types";
-
-type Response = {
-  me: `0x${string}`;
-  peer: `0x${string}`;
-  peerProfile: ProfileCard;
-  messages: DirectMessage[];
-};
+import type { Dm } from "@xmtp/browser-sdk";
+import { fetchProfileCard, type ProfileCard } from "@/lib/profile-fetch";
+import {
+  isTextMessage,
+  loadThreadMessages,
+  openOrCreateDm,
+  sendText,
+  streamThread,
+  type ThreadMessage,
+} from "@/lib/xmtp/dms";
 
 export function DmThread({
   me,
@@ -28,69 +31,176 @@ export function DmThread({
   me: `0x${string}`;
   peerAddress: string;
 }) {
-  const [data, setData] = useState<Response | null>(null);
+  const { status } = useXmtp();
+  const { data: meData } = useSession(me);
+
+  // Mirror the wrapper page contract — let the user see what's behind the
+  // signature wall before they commit to signing.
+  if (status.kind !== "ready") {
+    return (
+      <>
+        <Link
+          href="/dms"
+          className="font-mono text-sm text-ink-muted hover:text-ink"
+        >
+          ← messages
+        </Link>
+        <EnableDmsCard />
+      </>
+    );
+  }
+
+  return (
+    <XmtpThread
+      me={me}
+      peerAddress={peerAddress}
+      myInboxId={status.inboxId}
+      myDmHops={meData?.settings?.dmHops ?? 2}
+    />
+  );
+}
+
+function XmtpThread({
+  me,
+  peerAddress,
+  myInboxId,
+  myDmHops,
+}: {
+  me: `0x${string}`;
+  peerAddress: string;
+  myInboxId: string;
+  myDmHops: number;
+}) {
+  const { status } = useXmtp();
+  const [conv, setConv] = useState<Dm | null>(null);
+  const [convError, setConvError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [messages, setMessages] = useState<ThreadMessage[]>([]);
+  const [peerProfile, setPeerProfile] = useState<ProfileCard | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [gateError, setGateError] = useState<string | null>(null);
+  const [peerHops, setPeerHops] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const initRanForRef = useRef<string | null>(null);
 
-  const load = useCallback(
-    async (opts: { silent?: boolean } = {}) => {
-      try {
-        const res = await authedFetch(me, `/api/dms/${peerAddress}`);
-        if (!res.ok) throw new Error("Failed to load");
-        const json = (await res.json()) as Response;
-        setData(json);
-      } catch (err) {
-        if (!opts.silent) {
-          toast.error(err instanceof Error ? err.message : "Failed to load DMs");
-        }
-      } finally {
-        if (!opts.silent) setLoading(false);
-      }
-    },
-    [me, peerAddress],
-  );
-
+  // Fetch the peer Circles profile in parallel with everything else.
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchProfileCard(peerAddress as `0x${string}`).then(setPeerProfile);
+  }, [peerAddress]);
 
-  // Poll the open thread every 5s; pauses when the tab isn't visible.
-  usePolling(() => load({ silent: true }), 5_000);
+  // Distance check — if the peer is OUTSIDE my filter AND we don't already
+  // have a conversation, block initiation. (`/api/people/[address]` already
+  // computes the directed hop from me.)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authedFetch(me, `/api/people/${peerAddress}`);
+        if (!res.ok || cancelled) return;
+        const json = (await res.json()) as { hopsFromMe: number | null };
+        if (!cancelled) setPeerHops(json.hopsFromMe);
+      } catch {
+        /* network failure — assume in-range to avoid false negative */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [me, peerAddress]);
+
+  // Open or create the DM. We split this from the streaming effect so we
+  // don't have to re-open the conv on every re-render.
+  useEffect(() => {
+    if (status.kind !== "ready") return;
+    const key = `${status.inboxId}:${peerAddress.toLowerCase()}`;
+    if (initRanForRef.current === key) return;
+    initRanForRef.current = key;
+
+    let cancelled = false;
+    setLoading(true);
+    setConvError(null);
+
+    (async () => {
+      try {
+        const dm = await openOrCreateDm(
+          status.client,
+          peerAddress as `0x${string}`,
+        );
+        if (cancelled) return;
+        if (!dm) {
+          setConvError(
+            "This wallet has never used XMTP — they need to enable DMs in any XMTP-compatible app first.",
+          );
+          setLoading(false);
+          return;
+        }
+        setConv(dm);
+        const history = await loadThreadMessages(dm, myInboxId);
+        if (cancelled) return;
+        setMessages(history);
+        setLoading(false);
+      } catch (err) {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : "Failed to open DM";
+        setConvError(msg);
+        setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [status, peerAddress, myInboxId]);
+
+  // Streaming + scroll-to-bottom.
+  useEffect(() => {
+    if (!conv) return;
+    let cleanup: (() => void) | null = null;
+    (async () => {
+      cleanup = await streamThread(conv, (msg) => {
+        if (!isTextMessage(msg)) return;
+        const text = typeof msg.content === "string" ? msg.content : "";
+        const entry: ThreadMessage = {
+          id: msg.id,
+          text,
+          sentAtNs: msg.sentAtNs ?? 0n,
+          senderInboxId: msg.senderInboxId,
+          mine: msg.senderInboxId === myInboxId,
+        };
+        setMessages((prev) => {
+          if (prev.some((p) => p.id === entry.id)) return prev;
+          return [...prev, entry].sort((a, b) =>
+            a.sentAtNs < b.sentAtNs ? -1 : 1,
+          );
+        });
+      });
+    })();
+    return () => {
+      cleanup?.();
+    };
+  }, [conv, myInboxId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [data?.messages.length]);
+  }, [messages.length]);
+
+  const blockedAtInit =
+    !conv && (peerHops === null || peerHops > myDmHops);
+
+  const canSend = useMemo(() => !!conv && !sending && !!draft.trim(), [
+    conv,
+    sending,
+    draft,
+  ]);
 
   async function send() {
+    if (!conv) return;
     if (!draft.trim()) return;
     setSending(true);
-    setGateError(null);
     try {
-      const res = await authedFetch(me, `/api/dms/${peerAddress}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content: draft }),
-      });
-      if (res.status === 403) {
-        const err = (await res.json().catch(() => null)) as {
-          error?: string;
-        } | null;
-        setGateError(
-          err?.error ?? "Recipient blocks DMs from your hop distance.",
-        );
-        return;
-      }
-      if (!res.ok) {
-        const err = (await res.json().catch(() => null)) as {
-          error?: string;
-        } | null;
-        throw new Error(err?.error ?? `Failed (${res.status})`);
-      }
+      await sendText(conv, draft.trim());
       setDraft("");
-      await load({ silent: true });
+      // Optimistic — the stream will reconcile.
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Send failed");
     } finally {
@@ -98,10 +208,36 @@ export function DmThread({
     }
   }
 
-  if (loading && !data) {
-    return <Skeleton className="h-96 w-full" />;
+  if (loading) {
+    return (
+      <>
+        <Link
+          href="/dms"
+          className="font-mono text-sm text-ink-muted hover:text-ink"
+        >
+          ← messages
+        </Link>
+        <Skeleton className="h-96 w-full rounded-[20px]" />
+      </>
+    );
   }
-  if (!data) return null;
+
+  if (convError) {
+    return (
+      <>
+        <Link
+          href="/dms"
+          className="font-mono text-sm text-ink-muted hover:text-ink"
+        >
+          ← messages
+        </Link>
+        <div className="rounded-[20px] bg-surface p-5 shadow-card space-y-2">
+          <p className="text-sm font-semibold">Can&apos;t open this DM</p>
+          <p className="text-sm text-ink-muted">{convError}</p>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -113,17 +249,17 @@ export function DmThread({
           ← messages
         </Link>
         <Link
-          href={`/people/${data.peer}`}
+          href={`/people/${peerAddress}`}
           className="flex items-center gap-2 hover:underline"
         >
           <ProfileAvatar
-            src={data.peerProfile.previewImageUrl ?? data.peerProfile.imageUrl}
-            name={data.peerProfile.name}
-            address={data.peer}
+            src={peerProfile?.previewImageUrl ?? peerProfile?.imageUrl}
+            name={peerProfile?.name}
+            address={peerAddress}
             className="size-8"
           />
           <span className="text-base font-semibold">
-            <ProfileName name={data.peerProfile.name} address={data.peer} />
+            <ProfileName name={peerProfile?.name} address={peerAddress} />
           </span>
         </Link>
       </div>
@@ -132,80 +268,84 @@ export function DmThread({
         ref={scrollRef}
         className="flex h-[60vh] flex-col gap-3 overflow-y-auto rounded-[20px] bg-surface p-5 shadow-card"
       >
-        {data.messages.length === 0 ? (
+        {messages.length === 0 ? (
           <p className="m-auto text-base text-ink-muted">
             No messages yet — say hi.
           </p>
         ) : (
-          data.messages.map((m) => (
-            <MessageBubble key={m.id} message={m} mine={m.from === me} />
-          ))
+          messages.map((m) => <MessageBubble key={m.id} message={m} />)
         )}
       </div>
 
-      {gateError && (
-        <p className="rounded-[14px] bg-destructive/10 px-4 py-2.5 text-sm text-destructive">
-          {gateError}
-        </p>
+      {blockedAtInit ? (
+        <div className="rounded-[20px] bg-surface p-5 shadow-card space-y-2">
+          <p className="text-sm font-semibold">
+            Outside your initiation filter
+          </p>
+          <p className="text-sm text-ink-muted">
+            You only initiate DMs with people within {myDmHops} hop
+            {myDmHops === 1 ? "" : "s"} of you on Circles. Adjust this on the{" "}
+            <Link href="/dms" className="text-brand hover:text-brand-press">
+              DMs tab
+            </Link>{" "}
+            if you want to message them.
+          </p>
+        </div>
+      ) : (
+        <div className="flex gap-2 rounded-[20px] bg-surface p-3 shadow-card">
+          <Textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Write a message…"
+            rows={2}
+            maxLength={2000}
+            className="resize-none border-none bg-transparent p-2 text-base focus-visible:ring-0 shadow-none"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          <Button
+            onClick={send}
+            disabled={!canSend}
+            variant="brand"
+            className="self-end"
+          >
+            Send
+          </Button>
+        </div>
       )}
 
-      <div className="flex gap-2 rounded-[20px] bg-surface p-3 shadow-card">
-        <Textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Write a message…"
-          rows={2}
-          maxLength={2000}
-          className="resize-none border-none bg-transparent p-2 text-base focus-visible:ring-0 shadow-none"
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
-        <Button
-          onClick={send}
-          disabled={sending || !draft.trim()}
-          variant="brand"
-          className="self-end"
-        >
-          Send
-        </Button>
-      </div>
       <p className="text-xs text-ink-muted">
-        ⌘/Ctrl+Enter to send. Stored server-side (v0); E2E via XMTP planned.
+        ⌘/Ctrl+Enter to send. Messages are end-to-end encrypted via XMTP — the
+        Dappcon Chat server never sees them.
       </p>
     </>
   );
 }
 
-function MessageBubble({
-  message,
-  mine,
-}: {
-  message: DirectMessage;
-  mine: boolean;
-}) {
+function MessageBubble({ message }: { message: ThreadMessage }) {
   return (
-    <div className={mine ? "flex justify-end" : "flex justify-start"}>
+    <div className={message.mine ? "flex justify-end" : "flex justify-start"}>
       <div
         className={
           "max-w-[80%] rounded-2xl px-4 py-2.5 text-base whitespace-pre-wrap break-words " +
-          (mine ? "bg-ink text-surface" : "bg-hairline text-ink")
+          (message.mine ? "bg-ink text-surface" : "bg-hairline text-ink")
         }
       >
-        {message.content}
+        {message.text}
         <div
           className={
             "mt-1 text-[11px] font-mono " +
-            (mine ? "text-surface/60" : "text-ink-muted")
+            (message.mine ? "text-surface/60" : "text-ink-muted")
           }
         >
-          {new Date(message.createdAt).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
+          {new Date(Number(message.sentAtNs / 1_000_000n)).toLocaleTimeString(
+            [],
+            { hour: "2-digit", minute: "2-digit" },
+          )}
         </div>
       </div>
     </div>

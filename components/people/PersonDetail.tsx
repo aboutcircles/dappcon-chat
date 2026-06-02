@@ -140,7 +140,13 @@ export function PersonDetail({
 }
 
 function DmGate({ data }: { data: Response }) {
-  if (data.canDm) {
+  // New rule (post-XMTP): a DM is initiated by ME, so it's MY dmHops setting
+  // that gates it — not theirs. Once a conversation exists, both directions
+  // are always allowed (XMTP itself doesn't enforce a hop policy).
+  const canInitiate =
+    data.hopsFromMe !== null && data.hopsFromMe <= data.myDmHops;
+
+  if (canInitiate) {
     return (
       <Link
         href={`/dms/${data.target}`}
@@ -153,14 +159,13 @@ function DmGate({ data }: { data: Response }) {
   return (
     <div className="space-y-2 rounded-[20px] bg-surface p-4 text-sm shadow-card">
       <p className="font-semibold">
-        Can&apos;t DM — only accepts messages within{" "}
-        {data.theirDmHops === 1 ? "1 hop" : `${data.theirDmHops} hops`}.
+        Outside your initiation filter
       </p>
       <p className="text-ink-muted">
         {data.hopsFromMe == null
-          ? "No trust path within their range."
-          : `You're ${data.hopsFromMe} hop${data.hopsFromMe === 1 ? "" : "s"} away.`}{" "}
-        Ask a mutual Circles contact to trust both of you, or post on the wall.
+          ? `You only initiate DMs within ${data.myDmHops} ${data.myDmHops === 1 ? "hop" : "hops"} of you, and there's no trust path within that range.`
+          : `You only initiate DMs within ${data.myDmHops} ${data.myDmHops === 1 ? "hop" : "hops"} of you — they're ${data.hopsFromMe} away.`}{" "}
+        Widen the slider on the DMs tab to message them, or post on the wall.
       </p>
     </div>
   );
