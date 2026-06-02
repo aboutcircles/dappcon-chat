@@ -1,8 +1,10 @@
 onlyBuiltDependencies:
   - esbuild
+  - protobufjs
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver
   - msw
 allowBuilds:
   esbuild: true
+  protobufjs: true

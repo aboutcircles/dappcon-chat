@@ -5,6 +5,7 @@ import "./globals.css";
 import { AppShell } from "@/components/layout/AppShell";
 import { Toaster } from "@/components/ui/sonner";
 import { WalletProvider } from "@/components/wallet/WalletProvider";
+import { XmtpProvider } from "@/components/xmtp/XmtpProvider";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -34,7 +35,9 @@ export default function RootLayout({
     >
       <body className="min-h-full">
         <WalletProvider>
-          <AppShell>{children}</AppShell>
+          <XmtpProvider>
+            <AppShell>{children}</AppShell>
+          </XmtpProvider>
         </WalletProvider>
         <Toaster richColors position="top-right" />
       </body>
