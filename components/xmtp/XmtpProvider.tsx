@@ -62,6 +62,11 @@ function getEnv(): XmtpEnv {
   return "dev";
 }
 
+const COMMON_OPTS = {
+  dbEncryptionKey: undefined,
+  appVersion: "dappcon-chat/1",
+} as const;
+
 export function XmtpProvider({ children }: { children: ReactNode }) {
   const { address } = useWallet();
   const [status, setStatus] = useState<Status>({ kind: "idle" });
@@ -69,11 +74,57 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
   // Track the wallet address that the current client belongs to so we can
   // tear it down when the user switches Safes mid-session.
   const clientAddressRef = useRef<string | null>(null);
+  // Guard so the silent reattach effect doesn't refire for the same address
+  // (e.g. on every render).
+  const attachAttemptedFor = useRef<string | null>(null);
 
   const disable = useCallback(() => {
     clientAddressRef.current = null;
+    attachAttemptedFor.current = null;
     setStatus({ kind: "idle" });
   }, []);
+
+  /**
+   * Silent reattach via `Client.build(identifier, options)` — no signer,
+   * no signature. Works only if a local OPFS DB already exists for this
+   * inbox. Returns true on success, false if the DB is missing or the
+   * build fails (in which case the caller falls back to the signing path).
+   */
+  const tryBuild = useCallback(
+    async (addr: `0x${string}`): Promise<boolean> => {
+      if (typeof window === "undefined") return false;
+      const marker = localStorage.getItem(inboxKey(addr));
+      if (!marker) return false;
+      try {
+        const [{ Client, IdentifierKind, LogLevel }] = await Promise.all([
+          import("@xmtp/browser-sdk"),
+        ]);
+        const client = await Client.build(
+          {
+            identifier: addr.toLowerCase(),
+            identifierKind: IdentifierKind.Ethereum,
+          },
+          {
+            env: getEnv(),
+            loggingLevel: LogLevel.Info,
+            ...COMMON_OPTS,
+          },
+        );
+        const inboxId = client.inboxId;
+        if (!inboxId) return false;
+        clientAddressRef.current = addr;
+        setStatus({ kind: "ready", client, inboxId });
+        return true;
+      } catch (err) {
+        // Common cause: local OPFS database doesn't exist (cleared browser
+        // storage, new device, fresh incognito session). Not an error per
+        // se — fall back to the explicit enable flow.
+        console.info("[xmtp] silent reattach failed:", err);
+        return false;
+      }
+    },
+    [],
+  );
 
   const enable = useCallback(async (): Promise<boolean> => {
     if (!address) {
@@ -83,17 +134,18 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
       });
       return false;
     }
-    // Already attached to the same address? Nothing to do.
     if (
       status.kind === "ready" &&
       clientAddressRef.current?.toLowerCase() === address.toLowerCase()
     ) {
       return true;
     }
+
+    // Try the silent path first. If it works, we're done without the popup.
+    if (await tryBuild(address as `0x${string}`)) return true;
+
     setStatus({ kind: "initializing" });
     try {
-      // Dynamic imports — both packages touch `window` / WASM and must not
-      // run during SSR.
       const [
         { Client, LogLevel },
         { createCirclesSafeSigner, GNOSIS_CHAIN_ID },
@@ -107,8 +159,6 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
       const signer = createCirclesSafeSigner(
         address as `0x${string}`,
         async (message: string) => {
-          // The reference passes `"erc1271"` as the second arg — Safe signs
-          // via EIP-1271 and returns a hex signature with the magic value.
           const { signature } = await miniappSdk.signMessage(
             message,
             "erc1271",
@@ -123,21 +173,16 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
 
       const client = await Client.create(signer, {
         env,
-        dbEncryptionKey: undefined,
-        appVersion: "dappcon-chat/1",
         loggingLevel: LogLevel.Info,
+        ...COMMON_OPTS,
       });
 
-      // The reference calls `sendSyncRequest` post-create — for SCW it asks
-      // the XMTP network to sync this installation to any prior ones.
       try {
         await client.sendSyncRequest();
       } catch (err) {
         console.warn("[xmtp] sendSyncRequest failed (non-fatal):", err);
       }
 
-      // Persist a marker that an inbox exists for this address. The actual
-      // key material lives in OPFS, managed by the XMTP SDK.
       const inboxId = client.inboxId;
       if (!inboxId) {
         throw new Error(
@@ -162,10 +207,12 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
       });
       return false;
     }
-  }, [address, status]);
+  }, [address, status, tryBuild]);
 
-  // When the host wallet changes (or disconnects), tear down the client.
-  // The user must call `enable()` again to re-attach to the new wallet.
+  // Auto-reattach on mount and on address change. Uses `Client.build` so it
+  // never prompts a signature — if the local DB is missing, we silently
+  // fail and wait for the user to hit Enable DMs. Per-address attempt
+  // guard prevents re-runs.
   useEffect(() => {
     if (!address) {
       if (status.kind !== "idle") disable();
@@ -177,11 +224,13 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
       clientAddressRef.current.toLowerCase() !== address.toLowerCase()
     ) {
       disable();
+      return;
     }
-    // We don't auto-enable here — that would trigger a signMessage popup on
-    // every page load. Initialisation is lazy, gated by an explicit user
-    // action (see `useXmtp().enable`).
-  }, [address, disable, status]);
+    if (status.kind !== "idle") return;
+    if (attachAttemptedFor.current === address.toLowerCase()) return;
+    attachAttemptedFor.current = address.toLowerCase();
+    void tryBuild(address as `0x${string}`);
+  }, [address, disable, status, tryBuild]);
 
   const value = useMemo<ContextValue>(
     () => ({ status, enable, disable }),

@@ -122,6 +122,10 @@ export async function fetchInboxIdForAddress(
 /**
  * Returns the existing DM with `peerAddress` or creates one. Returns null if
  * the peer has no XMTP inbox (never used XMTP).
+ *
+ * Calls `conversations.sync()` before checking for an existing DM so we
+ * don't accidentally create a duplicate conversation when the peer
+ * already created one and sent a message that's waiting on the network.
  */
 export async function openOrCreateDm(
   client: Client,
@@ -129,6 +133,7 @@ export async function openOrCreateDm(
 ): Promise<Dm | null> {
   const inboxId = await fetchInboxIdForAddress(client, peerAddress);
   if (!inboxId) return null;
+  await client.conversations.sync();
   const existing = await client.conversations.getDmByInboxId(inboxId);
   if (existing) return existing;
   return client.conversations.createDm(inboxId);
@@ -185,15 +190,26 @@ export async function streamAllDmUpdates(
 ): Promise<() => void> {
   const convStream = await client.conversations.streamDms({
     onValue: async (dm) => {
+      console.debug("[xmtp] streamDms fired:", dm?.id);
       const s = await summarizeDm(dm);
       if (s) onConvChange(s);
     },
+    onError: (e) => console.warn("[xmtp] streamDms error:", e),
   });
 
   const msgStream = await client.conversations.streamAllMessages({
     onValue: (msg) => {
+      console.debug(
+        "[xmtp] streamAllMessages fired:",
+        msg?.id,
+        "conv:",
+        msg?.conversationId,
+        "ct:",
+        msg?.contentType,
+      );
       onMessage(msg);
     },
+    onError: (e) => console.warn("[xmtp] streamAllMessages error:", e),
   });
 
   return () => {
@@ -207,8 +223,18 @@ export async function streamThread(
   conv: Dm,
   onMessage: (message: DecodedMessage) => void,
 ): Promise<() => void> {
+  console.debug("[xmtp] streamThread mount, conv:", conv.id);
   const stream = await conv.stream({
-    onValue: (m) => onMessage(m),
+    onValue: (m) => {
+      console.debug(
+        "[xmtp] streamThread fired:",
+        m?.id,
+        "ct:",
+        m?.contentType,
+      );
+      onMessage(m);
+    },
+    onError: (e) => console.warn("[xmtp] streamThread error:", e),
   });
   return () => {
     void stream.end();
