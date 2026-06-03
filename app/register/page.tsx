@@ -10,21 +10,25 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { PageTitle } from "@/components/layout/PageTitle";
 import { useWallet } from "@/components/wallet/WalletProvider";
+import { useXmtp } from "@/components/xmtp/XmtpProvider";
 import { useSession } from "@/hooks/use-session";
 import { authedFetch } from "@/lib/api";
 import { isTagOption, TAG_OPTIONS, type TagOption } from "@/lib/tags";
 import { cn } from "@/lib/utils";
 import type { AttendanceMode } from "@/lib/types";
 
+type Phase = "idle" | "saving" | "enabling-xmtp";
+
 export default function RegisterPage() {
   const { address } = useWallet();
   const me = (address as `0x${string}` | null) ?? null;
   const { data, loading, refresh } = useSession(me);
+  const { status: xmtpStatus, enable: enableXmtp } = useXmtp();
   const router = useRouter();
   const [mode, setMode] = useState<AttendanceMode>("in-person");
   const [bio, setBio] = useState("");
   const [interests, setInterests] = useState<TagOption[]>([]);
-  const [submitting, setSubmitting] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
 
   useEffect(() => {
     if (loading) return;
@@ -47,7 +51,7 @@ export default function RegisterPage() {
 
   async function submit() {
     if (!me) return;
-    setSubmitting(true);
+    setPhase("saving");
     try {
       const res = await authedFetch(me, "/api/attendees", {
         method: "POST",
@@ -61,11 +65,26 @@ export default function RegisterPage() {
         throw new Error(err?.error ?? `Failed (${res.status})`);
       }
       await refresh();
+
+      // Auto-enable XMTP as part of registration so every attendee starts
+      // out DM-able. The signature step is bundled with registration so
+      // it reads as one onboarding flow, not two separate ones. If the
+      // user dismisses the popup or it fails, we still let them through;
+      // the DMs tab will reprompt later.
+      if (xmtpStatus.kind !== "ready") {
+        setPhase("enabling-xmtp");
+        const ok = await enableXmtp();
+        if (!ok) {
+          toast.warning(
+            "Registered, but encrypted DMs aren't set up. Enable from the DMs tab when you're ready.",
+          );
+        }
+      }
+
       router.push("/wall");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to register");
-    } finally {
-      setSubmitting(false);
+      setPhase("idle");
     }
   }
 
@@ -77,6 +96,19 @@ export default function RegisterPage() {
     );
   }
   const isUpdate = !!data.attendee;
+  // Updating a registration shouldn't re-trigger the XMTP signature if
+  // the user is already enabled — but if they aren't, treat Save as an
+  // opportunity to enable now.
+  const willEnableXmtp = xmtpStatus.kind !== "ready";
+
+  const buttonLabel =
+    phase === "saving"
+      ? "Saving…"
+      : phase === "enabling-xmtp"
+        ? "Enabling DMs (sign in host popup)…"
+        : isUpdate
+          ? "Save"
+          : "Register";
 
   return (
     <div className="mx-auto flex max-w-lg flex-col gap-8">
@@ -151,13 +183,21 @@ export default function RegisterPage() {
           </div>
         </div>
 
+        {willEnableXmtp && (
+          <p className="rounded-[14px] bg-canvas px-4 py-3 text-xs text-ink-muted">
+            One signature popup will follow registration to set up
+            end-to-end encrypted DMs via XMTP. Skipping is fine — you can
+            enable later from the DMs tab.
+          </p>
+        )}
+
         <Button
           onClick={submit}
-          disabled={submitting}
+          disabled={phase !== "idle"}
           variant="brand"
           className="w-full"
         >
-          {submitting ? "Saving…" : isUpdate ? "Save" : "Register"}
+          {buttonLabel}
         </Button>
       </div>
     </div>

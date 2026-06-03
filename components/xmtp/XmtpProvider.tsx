@@ -28,15 +28,20 @@ type ContextValue = {
    * Initialise (or re-attach to) the XMTP client for the connected wallet.
    * Triggers a SCW signMessage popup on first use; idempotent on subsequent
    * calls within the same session.
+   *
+   * Returns `true` if the client is ready when the promise resolves,
+   * `false` otherwise (signature dismissed, Safe not deployed, network
+   * error, etc.). Errors are surfaced via the `status` field — `enable`
+   * itself never throws.
    */
-  enable: () => Promise<void>;
+  enable: () => Promise<boolean>;
   /** Drop the client and clear in-memory state. Does NOT clear OPFS keys. */
   disable: () => void;
 };
 
 const XmtpContext = createContext<ContextValue>({
   status: { kind: "idle" },
-  enable: async () => undefined,
+  enable: async () => false,
   disable: () => undefined,
 });
 
@@ -70,20 +75,20 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
     setStatus({ kind: "idle" });
   }, []);
 
-  const enable = useCallback(async () => {
+  const enable = useCallback(async (): Promise<boolean> => {
     if (!address) {
       setStatus({
         kind: "error",
         message: "No wallet — open this app from the Circles host first.",
       });
-      return;
+      return false;
     }
     // Already attached to the same address? Nothing to do.
     if (
       status.kind === "ready" &&
       clientAddressRef.current?.toLowerCase() === address.toLowerCase()
     ) {
-      return;
+      return true;
     }
     setStatus({ kind: "initializing" });
     try {
@@ -144,6 +149,7 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
       }
       clientAddressRef.current = address;
       setStatus({ kind: "ready", client, inboxId });
+      return true;
     } catch (err) {
       console.error("[xmtp] Client.create failed:", err);
       clientAddressRef.current = null;
@@ -154,6 +160,7 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
             ? err.message
             : "Could not initialise XMTP. See console.",
       });
+      return false;
     }
   }, [address, status]);
 
