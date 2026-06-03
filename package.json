@@ -16,6 +16,7 @@
     "@base-ui/react": "^1.4.1",
     "@neondatabase/serverless": "^1.1.0",
     "@xmtp/browser-sdk": "6.3.0",
+    "@xmtp/content-type-primitives": "^3.0.0",
     "@xmtp/content-type-text": "^2.0.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

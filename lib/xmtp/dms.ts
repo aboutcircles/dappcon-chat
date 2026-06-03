@@ -19,6 +19,8 @@ import {
   type Dm,
   IdentifierKind,
 } from "@xmtp/browser-sdk";
+import { contentTypesAreEqual } from "@xmtp/content-type-primitives";
+import { ContentTypeText } from "@xmtp/content-type-text";
 
 import { normalizeAddress } from "@/lib/addr";
 
@@ -40,8 +42,6 @@ export type ThreadMessage = {
   mine: boolean;
 };
 
-const TEXT_CONTENT_TYPE = "xmtp.org/text:1.0";
-
 function getMessageText(msg: DecodedMessage): string {
   const content = msg.content;
   if (typeof content === "string") return content;
@@ -50,8 +50,16 @@ function getMessageText(msg: DecodedMessage): string {
   return "";
 }
 
+/**
+ * Canonical content-type check per the XMTP browser SDK docs (chunk 00447):
+ *   `contentTypesAreEqual(message.contentType, ContentTypeText)`
+ *
+ * String comparison against `contentType.toString()` is fragile — the
+ * serialised form differs across SDK versions and silently filters out
+ * every text message if you get the format wrong.
+ */
 function isText(msg: DecodedMessage): boolean {
-  return msg.contentType?.toString() === TEXT_CONTENT_TYPE;
+  return !!msg.contentType && contentTypesAreEqual(msg.contentType, ContentTypeText);
 }
 
 async function peerAddressOf(conv: Dm): Promise<`0x${string}` | null> {
