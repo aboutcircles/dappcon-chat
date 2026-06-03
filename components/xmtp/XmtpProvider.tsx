@@ -86,9 +86,17 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
 
   /**
    * Silent reattach via `Client.build(identifier, options)` — no signer,
-   * no signature. Works only if a local OPFS DB already exists for this
-   * inbox. Returns true on success, false if the DB is missing or the
-   * build fails (in which case the caller falls back to the signing path).
+   * no signature. Works only if a local OPFS DB already exists AND it
+   * contains a fully registered identity. Returns true on success, false
+   * if anything is amiss; the caller falls back to the explicit Enable
+   * flow which runs Client.create.
+   *
+   * After a successful build we verify `client.isRegistered`. If the local
+   * SQLite was opened but never finished registration (e.g. an earlier
+   * Client.create was interrupted, or the signature was dismissed mid-
+   * flow), `isRegistered` is false and any subsequent operation throws
+   * the wasm-bindings "Uninitialized identity" error. We catch that
+   * here and stale-mark the inbox so the next Enable cleans up.
    */
   const tryBuild = useCallback(
     async (addr: `0x${string}`): Promise<boolean> => {
@@ -111,7 +119,20 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
           },
         );
         const inboxId = client.inboxId;
-        if (!inboxId) return false;
+        if (!inboxId) {
+          console.info("[xmtp] Client.build returned no inbox id");
+          return false;
+        }
+        if (!client.isRegistered) {
+          // Local DB is half-built. Drop the marker so the next
+          // Enable click runs Client.create from scratch instead of
+          // attempting another build on the same stale state.
+          console.warn(
+            "[xmtp] Client.build returned an unregistered identity — clearing marker",
+          );
+          localStorage.removeItem(inboxKey(addr));
+          return false;
+        }
         clientAddressRef.current = addr;
         setStatus({ kind: "ready", client, inboxId });
         return true;
