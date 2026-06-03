@@ -14,7 +14,6 @@
  */
 
 import {
-  ConsentState,
   type Client,
   type DecodedMessage,
   type Dm,
@@ -150,24 +149,34 @@ export async function loadThreadMessages(
   return out;
 }
 
+/**
+ * Send a text message and pull it (and anything else newly published) back
+ * into the conversation's local state.
+ *
+ * Matches the reference's handleSend → sync pattern: `sendText` writes
+ * locally + publishes to network, but the per-conversation stream observes
+ * the network, so the sender's own message can lag a few hundred ms before
+ * it appears via the stream. A post-send `sync` populates it immediately.
+ */
 export async function sendText(conv: Dm, text: string): Promise<void> {
   await conv.sync();
   await conv.sendText(text);
+  await conv.sync();
 }
 
 /**
- * Subscribe to new conversations + last-message changes. Returns a cleanup
- * function to stop both streams.
+ * Subscribe to new DM conversations + every incoming message. Cleanup
+ * returns a function that ends both streams. No consent filter — the
+ * reference repo accepts all consent states and lets the UI decide,
+ * which matches our hop-based gate semantics.
  */
 export async function streamAllDmUpdates(
   client: Client,
   onConvChange: (summary: DmSummary) => void,
   onMessage: (message: DecodedMessage) => void,
 ): Promise<() => void> {
-  const convStream = await client.conversations.stream({
-    onValue: async (conv) => {
-      const dm = conv as Dm;
-      if (!dm.peerInboxId) return; // non-DM
+  const convStream = await client.conversations.streamDms({
+    onValue: async (dm) => {
       const s = await summarizeDm(dm);
       if (s) onConvChange(s);
     },
@@ -177,13 +186,11 @@ export async function streamAllDmUpdates(
     onValue: (msg) => {
       onMessage(msg);
     },
-    consentStates: [ConsentState.Allowed, ConsentState.Unknown],
   });
 
   return () => {
-    // Both stream proxies expose .return(); some versions also expose .end().
-    convStream.return?.();
-    msgStream.return?.();
+    void convStream.end();
+    void msgStream.end();
   };
 }
 
@@ -196,8 +203,13 @@ export async function streamThread(
     onValue: (m) => onMessage(m),
   });
   return () => {
-    stream.return?.();
+    void stream.end();
   };
+}
+
+/** Pull the latest messages for a conversation from the network. */
+export async function syncConv(conv: Dm): Promise<void> {
+  await conv.sync();
 }
 
 export { isText as isTextMessage };

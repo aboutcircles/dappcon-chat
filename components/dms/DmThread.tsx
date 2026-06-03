@@ -15,12 +15,14 @@ import { useSession } from "@/hooks/use-session";
 import { authedFetch } from "@/lib/api";
 import type { Dm } from "@xmtp/browser-sdk";
 import { fetchProfileCard, type ProfileCard } from "@/lib/profile-fetch";
+import { usePolling } from "@/hooks/use-polling";
 import {
   isTextMessage,
   loadThreadMessages,
   openOrCreateDm,
   sendText,
   streamThread,
+  syncConv,
   type ThreadMessage,
 } from "@/lib/xmtp/dms";
 
@@ -200,13 +202,31 @@ function XmtpThread({
     try {
       await sendText(conv, draft.trim());
       setDraft("");
-      // Optimistic — the stream will reconcile.
+      // Re-load from local state — sendText syncs the conversation, so this
+      // pulls the just-sent message into our messages list immediately
+      // without waiting for the stream callback.
+      const fresh = await loadThreadMessages(conv, myInboxId);
+      setMessages(fresh);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Send failed");
     } finally {
       setSending(false);
     }
   }
+
+  // Periodic sync as a safety net — if the per-conversation stream misses
+  // a message (network flake, browser throttle), this catches it within
+  // ~10 s. Cheap because XMTP sync is local + incremental.
+  usePolling(async () => {
+    if (!conv) return;
+    try {
+      await syncConv(conv);
+      const fresh = await loadThreadMessages(conv, myInboxId);
+      setMessages(fresh);
+    } catch {
+      /* non-fatal */
+    }
+  }, 10_000);
 
   if (loading) {
     return (

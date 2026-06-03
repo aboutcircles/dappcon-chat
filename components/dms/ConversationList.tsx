@@ -12,6 +12,7 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { useWallet } from "@/components/wallet/WalletProvider";
 import { useXmtp } from "@/components/xmtp/XmtpProvider";
+import { usePolling } from "@/hooks/use-polling";
 import { useSession } from "@/hooks/use-session";
 import { authedFetch } from "@/lib/api";
 import { MAX_HOPS } from "@/lib/constants";
@@ -19,6 +20,7 @@ import { type ProfileCard } from "@/lib/profile-fetch";
 import {
   listAllDms,
   streamAllDmUpdates,
+  summarizeDm,
   isTextMessage,
   type DmSummary,
 } from "@/lib/xmtp/dms";
@@ -113,12 +115,17 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
               return m;
             });
           },
-          (msg) => {
+          async (msg) => {
             if (!isTextMessage(msg)) return;
             const content = typeof msg.content === "string" ? msg.content : "";
+            // If the message arrives before we've registered the conversation
+            // (race between conv stream and message stream for first
+            // contact), re-resolve the DM and add it. Don't drop the message.
+            let prevHasRow = false;
             setRows((prev) => {
-              const existing = prev.get(msg.conversationId);
-              if (!existing) return prev;
+              prevHasRow = prev.has(msg.conversationId);
+              if (!prevHasRow) return prev;
+              const existing = prev.get(msg.conversationId)!;
               const sentAtNs = msg.sentAtNs ?? 0n;
               if (sentAtNs <= existing.lastMessageSentAtNs) return prev;
               const m = new Map(prev);
@@ -130,6 +137,26 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
               });
               return m;
             });
+            if (!prevHasRow) {
+              // Conversation wasn't in our map — fetch the full Dm and add.
+              try {
+                const dm = await client.conversations.getDmByInboxId(
+                  msg.senderInboxId,
+                );
+                if (dm) {
+                  const s = await summarizeDm(dm);
+                  if (s) {
+                    setRows((prev) => {
+                      const m = new Map(prev);
+                      m.set(s.conversationId, { ...s, profile: null });
+                      return m;
+                    });
+                  }
+                }
+              } catch {
+                /* non-fatal */
+              }
+            }
           },
         );
       } catch (err) {
@@ -146,6 +173,30 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
       cleanupStreams?.();
     };
   }, [status]);
+
+  // Safety net: periodically re-list DMs in case the streams missed
+  // something (network flake, browser throttle, fresh first-contact race).
+  // Cheap because XMTP listDms is local + the sync is incremental.
+  usePolling(async () => {
+    if (status.kind !== "ready") return;
+    try {
+      const summaries = await listAllDms(status.client);
+      setRows((prev) => {
+        const next = new Map(prev);
+        for (const s of summaries) {
+          const existing = next.get(s.conversationId);
+          // Don't overwrite the lazy-loaded profile.
+          next.set(s.conversationId, {
+            ...s,
+            profile: existing?.profile ?? null,
+          });
+        }
+        return next;
+      });
+    } catch {
+      /* non-fatal */
+    }
+  }, 12_000);
 
   const sorted = useMemo(() => {
     return Array.from(rows.values()).sort((a, b) => {
