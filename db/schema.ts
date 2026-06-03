@@ -58,17 +58,3 @@ export const reactions = pgTable(
   }),
 );
 
-export const dms = pgTable(
-  "dms",
-  {
-    id: text("id").primaryKey(),
-    fromAddress: text("from_address").notNull(),
-    toAddress: text("to_address").notNull(),
-    content: text("content").notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull(),
-  },
-  (t) => ({
-    byPair: index("dms_pair_idx").on(t.fromAddress, t.toAddress),
-    byCreatedAt: index("dms_created_at_idx").on(t.createdAt),
-  }),
-);

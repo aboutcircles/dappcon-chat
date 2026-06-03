@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomBytes } from "node:crypto";
 
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db, schema } from "@/db";
 import { normalizeAddress } from "@/lib/addr";
@@ -10,21 +10,13 @@ import { DEFAULT_HOPS, MAX_HOPS } from "@/lib/constants";
 import type {
   AttendanceMode,
   Attendee,
-  DirectMessage,
   Post,
   Reaction,
   Settings,
 } from "@/lib/types";
 import { REACTION_EMOJIS } from "@/lib/types";
 
-export type {
-  AttendanceMode,
-  Attendee,
-  DirectMessage,
-  Post,
-  Reaction,
-  Settings,
-};
+export type { AttendanceMode, Attendee, Post, Reaction, Settings };
 
 function clampHops(value: unknown, fallback: number): number {
   const n = typeof value === "number" ? value : Number(value);
@@ -300,100 +292,21 @@ function rowToReaction(row: typeof schema.reactions.$inferSelect): Reaction {
   };
 }
 
-/* ---------- DMs ---------- */
-
-export async function listConversations(
-  me: `0x${string}`,
-): Promise<{ peer: `0x${string}`; last: DirectMessage }[]> {
-  // One query for all messages the user is part of; group in memory (the
-  // conversation count is bounded by attendee count, so this is fine).
-  const rows = await db()
-    .select()
-    .from(schema.dms)
-    .where(
-      or(
-        eq(schema.dms.fromAddress, me),
-        eq(schema.dms.toAddress, me),
-      ),
-    )
-    .orderBy(asc(schema.dms.createdAt));
-  const lastByPeer = new Map<`0x${string}`, DirectMessage>();
-  for (const r of rows) {
-    const msg = rowToDm(r);
-    const peer = msg.from === me ? msg.to : msg.from;
-    const prev = lastByPeer.get(peer);
-    if (!prev || prev.createdAt < msg.createdAt) lastByPeer.set(peer, msg);
-  }
-  return Array.from(lastByPeer.entries())
-    .map(([peer, last]) => ({ peer, last }))
-    .sort((a, b) => b.last.createdAt - a.last.createdAt);
-}
-
-export async function listDirectMessages(
-  me: `0x${string}`,
-  peer: `0x${string}`,
-): Promise<DirectMessage[]> {
-  const rows = await db()
-    .select()
-    .from(schema.dms)
-    .where(
-      or(
-        and(
-          eq(schema.dms.fromAddress, me),
-          eq(schema.dms.toAddress, peer),
-        ),
-        and(
-          eq(schema.dms.fromAddress, peer),
-          eq(schema.dms.toAddress, me),
-        ),
-      ),
-    )
-    .orderBy(asc(schema.dms.createdAt));
-  return rows.map(rowToDm);
-}
-
-export async function sendDirectMessage(
-  from: `0x${string}`,
-  to: `0x${string}`,
-  content: string,
-): Promise<DirectMessage> {
-  const trimmed = content.trim();
-  if (!trimmed) throw new Error("Empty message");
-  if (trimmed.length > 2000) throw new Error("Message too long");
-  const message: DirectMessage = {
-    id: randomId(),
-    from,
-    to,
-    content: trimmed,
-    createdAt: Date.now(),
-  };
-  await db().insert(schema.dms).values({
-    id: message.id,
-    fromAddress: from,
-    toAddress: to,
-    content: trimmed,
-    createdAt: message.createdAt,
-  });
-  return message;
-}
-
-function rowToDm(row: typeof schema.dms.$inferSelect): DirectMessage {
-  return {
-    id: row.id,
-    from: row.fromAddress as `0x${string}`,
-    to: row.toAddress as `0x${string}`,
-    content: row.content,
-    createdAt: row.createdAt,
-  };
-}
-
-/* ---------- Privacy: per-user delete + global wipe ---------- */
+/* ---------- Privacy: per-user delete + global wipe ----------
+ *
+ * Note: DM storage is intentionally absent from this layer — direct
+ * messages live on XMTP (end-to-end encrypted, off-platform) and never
+ * touch our database.
+ */
 
 /**
- * Delete every row this address owns: attendee record, settings, posts (and
- * any replies that pointed at the deleted posts), reactions they cast, and
- * DMs they sent OR received. Used by the "Delete my data" button and by the
- * post-event cleanup cron.
+ * Delete every row this address owns from our server-side store: attendee
+ * record, settings, posts (and any replies that pointed at the deleted
+ * posts), and reactions they cast or that targeted their posts.
+ *
+ * Does NOT touch DMs — those live on XMTP, off-platform. The Settings UI
+ * exposes a separate "Reset XMTP state" button that clears the local DM
+ * cache.
  */
 export async function deleteUserData(address: `0x${string}`): Promise<void> {
   // Capture their posts first so we can cascade-delete reactions on them.
@@ -421,16 +334,6 @@ export async function deleteUserData(address: `0x${string}`): Promise<void> {
   // Then their own posts.
   await db().delete(schema.posts).where(eq(schema.posts.author, address));
 
-  // DMs in either direction.
-  await db()
-    .delete(schema.dms)
-    .where(
-      or(
-        eq(schema.dms.fromAddress, address),
-        eq(schema.dms.toAddress, address),
-      ),
-    );
-
   // Settings + attendee row.
   await db()
     .delete(schema.settings)
@@ -443,7 +346,7 @@ export async function deleteUserData(address: `0x${string}`): Promise<void> {
 export async function wipeAllData(): Promise<void> {
   // Truncate every table. Order doesn't matter (no FKs), but be explicit.
   await db().execute(
-    sql`TRUNCATE TABLE reactions, posts, dms, settings, attendees RESTART IDENTITY`,
+    sql`TRUNCATE TABLE reactions, posts, settings, attendees RESTART IDENTITY`,
   );
 }
 

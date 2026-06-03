@@ -43,11 +43,3 @@ export type Reaction = {
  */
 export const REACTION_EMOJIS = ["👍", "👎", "❤️", "💯", "🤔", "🚀"] as const;
 export type ReactionEmoji = (typeof REACTION_EMOJIS)[number];
-
-export type DirectMessage = {
-  id: string;
-  from: `0x${string}`;
-  to: `0x${string}`;
-  content: string;
-  createdAt: number;
-};

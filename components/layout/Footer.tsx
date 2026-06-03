@@ -5,8 +5,8 @@ export function Footer() {
     <footer className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8 text-sm text-ink-muted">
       <p className="border-t border-hairline pt-5 leading-relaxed">
         Feed posts and registration are stored in Neon Postgres and will be
-        wiped 48h after the event finishes. DMs are encrypted via XMTP
-        (rolling out).{" "}
+        wiped 48h after the event finishes. DMs are end-to-end encrypted via
+        XMTP — the Dappcon Chat server never sees them.{" "}
         <a
           href={REPO_URL}
           target="_blank"

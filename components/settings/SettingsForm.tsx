@@ -73,8 +73,8 @@ export function SettingsForm() {
           <h2 className="text-sm font-semibold">Encrypted DMs (XMTP)</h2>
           <p className="text-xs text-ink-muted">
             {xmtpStatus.kind === "ready"
-              ? "Your XMTP inbox is set up. Reset if you're seeing weird signature popups or want to re-derive identity on a new device."
-              : "Not set up yet — your inbox will be created the next time you open the DMs tab or update your registration."}
+              ? "Your XMTP inbox is active. Reset if you're moving to a new device or want to start over."
+              : "Will be set up automatically next time you open the DMs tab or finish registration."}
           </p>
         </div>
         <Button
@@ -93,9 +93,9 @@ export function SettingsForm() {
             Delete my data
           </h2>
           <p className="text-xs text-ink-muted">
-            Wipes your registration, posts and reactions on our server. XMTP
-            DMs live on the XMTP network and aren&apos;t affected by this
-            button — use Reset XMTP state above for those.
+            Wipes your registration, posts and reactions on our server. DMs
+            live on the XMTP network and aren&apos;t affected — use Reset XMTP
+            state above to clear those locally.
           </p>
         </div>
         {confirming ? (

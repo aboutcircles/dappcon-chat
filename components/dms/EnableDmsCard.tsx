@@ -31,9 +31,10 @@ export function EnableDmsCard() {
         >
           XMTP
         </a>{" "}
-        for direct messages — your conversations are end-to-end encrypted and
+        for direct messages. Your conversations are end-to-end encrypted and
         never touch our server. The Circles host will pop up exactly one
-        signature request to register your inbox.
+        signature to register your inbox — subsequent visits reattach
+        silently from this device&apos;s local storage.
       </p>
       <Button
         variant="brand"
