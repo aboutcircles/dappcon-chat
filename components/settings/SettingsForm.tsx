@@ -7,12 +7,14 @@ import { toast } from "sonner";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useWallet } from "@/components/wallet/WalletProvider";
+import { useXmtp } from "@/components/xmtp/XmtpProvider";
 import { authedFetch } from "@/lib/api";
 
 export function SettingsForm() {
   const { address } = useWallet();
   const me = (address as `0x${string}` | null) ?? null;
   const router = useRouter();
+  const { status: xmtpStatus, disable: disableXmtp } = useXmtp();
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -30,6 +32,23 @@ export function SettingsForm() {
     } finally {
       setDeleting(false);
     }
+  }
+
+  function resetXmtp() {
+    if (!me) return;
+    // Drop the localStorage marker so the next enable() treats the wallet
+    // as fresh and re-derives the inbox state. OPFS is cleared by the
+    // browser-side SDK on the next Client.create from the fresh state.
+    try {
+      const key = `xmtp-inbox-${me.toLowerCase()}`;
+      localStorage.removeItem(key);
+    } catch {
+      /* ignore — localStorage may be unavailable in some hosts */
+    }
+    disableXmtp();
+    toast.success(
+      "XMTP state cleared. Next time you open DMs you'll be asked to sign once.",
+    );
   }
 
   return (
@@ -51,12 +70,32 @@ export function SettingsForm() {
 
       <section className="rounded-[20px] bg-surface p-5 shadow-card space-y-3">
         <div>
+          <h2 className="text-sm font-semibold">Encrypted DMs (XMTP)</h2>
+          <p className="text-xs text-ink-muted">
+            {xmtpStatus.kind === "ready"
+              ? "Your XMTP inbox is set up. Reset if you're seeing weird signature popups or want to re-derive identity on a new device."
+              : "Not set up yet — your inbox will be created the next time you open the DMs tab or update your registration."}
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={resetXmtp}
+          disabled={xmtpStatus.kind === "idle"}
+        >
+          Reset XMTP state
+        </Button>
+      </section>
+
+      <section className="rounded-[20px] bg-surface p-5 shadow-card space-y-3">
+        <div>
           <h2 className="text-sm font-semibold text-destructive">
             Delete my data
           </h2>
           <p className="text-xs text-ink-muted">
-            Wipes your registration, posts, reactions and DMs. Cannot be
-            undone.
+            Wipes your registration, posts and reactions on our server. XMTP
+            DMs live on the XMTP network and aren&apos;t affected by this
+            button — use Reset XMTP state above for those.
           </p>
         </div>
         {confirming ? (

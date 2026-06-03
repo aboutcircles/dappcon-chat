@@ -185,9 +185,9 @@ export default function RegisterPage() {
 
         {willEnableXmtp && (
           <p className="rounded-[14px] bg-canvas px-4 py-3 text-xs text-ink-muted">
-            One signature popup will follow registration to set up
-            end-to-end encrypted DMs via XMTP. Skipping is fine — you can
-            enable later from the DMs tab.
+            One signature in the Circles host follows registration to set
+            up end-to-end encrypted DMs via XMTP. Skipping is fine — you
+            can enable later from the DMs tab.
           </p>
         )}
 

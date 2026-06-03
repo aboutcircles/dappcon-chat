@@ -32,8 +32,8 @@ export function EnableDmsCard() {
           XMTP
         </a>{" "}
         for direct messages — your conversations are end-to-end encrypted and
-        never touch our server. To set up your inbox, the Circles host will
-        ask you to sign one message.
+        never touch our server. The Circles host will pop up exactly one
+        signature request to register your inbox.
       </p>
       <Button
         variant="brand"
