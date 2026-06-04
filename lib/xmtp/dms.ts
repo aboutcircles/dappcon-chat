@@ -68,6 +68,27 @@ function isText(msg: DecodedMessage): boolean {
  * Ethereum identifier on file for the inbox (extremely rare — the inbox
  * has to be registered with something to receive messages).
  */
+type RawIdentifier = { identifier: string; identifierKind: IdentifierKind };
+type RawInboxState = {
+  accountIdentifiers?: RawIdentifier[];
+  recoveryIdentifier?: RawIdentifier;
+};
+
+function pickEthereum(state: RawInboxState | undefined): string | null {
+  if (!state) return null;
+  const fromAccounts = state.accountIdentifiers?.find(
+    (i) => i.identifierKind === IdentifierKind.Ethereum,
+  )?.identifier;
+  if (fromAccounts) return fromAccounts;
+  // Safe-created inboxes sometimes surface the Ethereum address only on
+  // `recoveryIdentifier` until the next association is published.
+  const fromRecovery =
+    state.recoveryIdentifier?.identifierKind === IdentifierKind.Ethereum
+      ? state.recoveryIdentifier?.identifier
+      : null;
+  return fromRecovery ?? null;
+}
+
 export async function resolvePeerAddressFromInboxId(
   client: Client,
   inboxId: string,
@@ -80,15 +101,8 @@ export async function resolvePeerAddressFromInboxId(
   ];
   for (const lookup of lookups) {
     try {
-      const states = (await lookup()) as Array<{
-        accountIdentifiers?: Array<{
-          identifier: string;
-          identifierKind: IdentifierKind;
-        }>;
-      }>;
-      const id = states[0]?.accountIdentifiers?.find(
-        (i) => i.identifierKind === IdentifierKind.Ethereum,
-      )?.identifier;
+      const states = (await lookup()) as RawInboxState[];
+      const id = pickEthereum(states[0]);
       if (id) return normalizeAddress(id);
     } catch (err) {
       console.warn("[xmtp] inbox-state lookup failed:", err);
@@ -117,7 +131,8 @@ async function peerAddressOf(
   }
   // Members map didn't carry an Ethereum identifier yet (common on a
   // freshly streamed-in first-contact DM where the peer's identity hasn't
-  // synced locally). Ask the network directly.
+  // synced locally). Ask the network directly — that path also checks the
+  // recoveryIdentifier for Safe-created inboxes.
   if (client && peerInboxId) {
     return resolvePeerAddressFromInboxId(client, peerInboxId);
   }

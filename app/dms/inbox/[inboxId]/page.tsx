@@ -42,19 +42,51 @@ function InboxResolver({ inboxId }: { inboxId: string }) {
     if (status.kind !== "ready") return;
     const client = status.client;
     let cancelled = false;
+
+    // Retry with exponential-ish backoff because the peer's identifier may
+    // need a few seconds to surface on the network after a first-contact
+    // DM. Total wall time ~30s. We also sync the conversation list once
+    // before each attempt so getDmByInboxId works as a secondary path.
+    const delaysMs = [0, 1_500, 3_000, 5_000, 10_000];
+
     (async () => {
-      try {
-        const addr = await resolvePeerAddressFromInboxId(client, inboxId);
+      for (let i = 0; i < delaysMs.length; i++) {
         if (cancelled) return;
-        if (addr) {
-          router.replace(`/dms/${addr}`);
-        } else {
-          setPhase("unresolved");
+        const delay = delaysMs[i];
+        if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+        if (cancelled) return;
+        try {
+          await client.conversations.sync().catch(() => undefined);
+          let addr = await resolvePeerAddressFromInboxId(client, inboxId);
+          // Second path: walk the DM directly. members() can surface the
+          // address when preferences hasn't refreshed yet.
+          if (!addr) {
+            try {
+              const dm = await client.conversations.getDmByInboxId(inboxId);
+              if (dm) {
+                const members = await dm.members();
+                const peer = members.find((m) => m.inboxId === inboxId);
+                const id = peer?.accountIdentifiers?.find(
+                  (j) => j.identifierKind === 0, // IdentifierKind.Ethereum
+                )?.identifier;
+                if (id) addr = id as `0x${string}`;
+              }
+            } catch {
+              /* non-fatal */
+            }
+          }
+          if (cancelled) return;
+          if (addr) {
+            router.replace(`/dms/${addr}`);
+            return;
+          }
+        } catch (err) {
+          console.warn("[xmtp] inbox resolve attempt failed:", err);
         }
-      } catch {
-        if (!cancelled) setPhase("error");
       }
+      if (!cancelled) setPhase("unresolved");
     })();
+
     return () => {
       cancelled = true;
     };
@@ -86,13 +118,20 @@ function InboxResolver({ inboxId }: { inboxId: string }) {
         <Skeleton className="h-40 w-full rounded-[20px]" />
       )}
       {phase === "unresolved" && (
-        <div className="rounded-[20px] bg-surface p-5 shadow-card space-y-2">
-          <p className="text-sm font-semibold">Still syncing this contact</p>
+        <div className="rounded-[20px] bg-surface p-5 shadow-card space-y-3">
+          <p className="text-sm font-semibold">Couldn&apos;t resolve this contact</p>
           <p className="text-sm text-ink-muted">
-            XMTP hasn&apos;t finished resolving this inbox to a wallet address
-            yet. Head back to the DMs list — it&apos;ll appear with their
-            Circles profile once the sync catches up.
+            XMTP hasn&apos;t mapped this inbox to a wallet address after
+            several retries. The peer may be on a non-Circles XMTP client, or
+            their identity hasn&apos;t propagated yet.
           </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="text-sm font-semibold text-brand hover:text-brand-press"
+          >
+            Try again
+          </button>
         </div>
       )}
       {phase === "error" && (
