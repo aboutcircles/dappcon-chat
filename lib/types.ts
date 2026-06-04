@@ -6,6 +6,13 @@ export type Attendee = {
   bio: string;
   interests: string[];
   registeredAt: number;
+  /**
+   * The attendee's XMTP inbox ID, recorded the first time their browser
+   * attached to XMTP after this column was added. Null for attendees who
+   * registered before the column existed and haven't reopened the app
+   * since, and for attendees who haven't enabled XMTP yet.
+   */
+  xmtpInboxId: string | null;
 };
 
 export type Settings = {

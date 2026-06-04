@@ -63,6 +63,32 @@ export async function listAttendees(): Promise<Attendee[]> {
   return rows.map(rowToAttendee);
 }
 
+export async function getAttendeeAddressByXmtpInboxId(
+  inboxId: string,
+): Promise<`0x${string}` | null> {
+  const rows = await db()
+    .select({ address: schema.attendees.address })
+    .from(schema.attendees)
+    .where(eq(schema.attendees.xmtpInboxId, inboxId))
+    .limit(1);
+  const row = rows[0];
+  return row ? (row.address as `0x${string}`) : null;
+}
+
+/**
+ * Record the attendee's own XMTP inbox ID. Idempotent — overwrites if the
+ * device-local inbox changes (e.g. they reset XMTP state).
+ */
+export async function setAttendeeXmtpInboxId(
+  address: `0x${string}`,
+  inboxId: string,
+): Promise<void> {
+  await db()
+    .update(schema.attendees)
+    .set({ xmtpInboxId: inboxId })
+    .where(eq(schema.attendees.address, address));
+}
+
 export async function upsertAttendee(
   address: `0x${string}`,
   patch: { mode?: AttendanceMode; bio?: string; interests?: string[] },
@@ -74,6 +100,7 @@ export async function upsertAttendee(
     bio: patch.bio ?? existing?.bio ?? "",
     interests: patch.interests ?? existing?.interests ?? [],
     registeredAt: existing?.registeredAt ?? Date.now(),
+    xmtpInboxId: existing?.xmtpInboxId ?? null,
   };
   await db()
     .insert(schema.attendees)
@@ -102,6 +129,7 @@ function rowToAttendee(row: typeof schema.attendees.$inferSelect): Attendee {
     bio: row.bio,
     interests: row.interests,
     registeredAt: row.registeredAt,
+    xmtpInboxId: row.xmtpInboxId ?? null,
   };
 }
 

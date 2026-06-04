@@ -49,6 +49,28 @@ function inboxKey(address: string): string {
   return `xmtp-inbox-${address.toLowerCase()}`;
 }
 
+/**
+ * Fire-and-forget POST to record the user's inbox→address mapping in our
+ * own DB. The XMTP preferences API doesn't reliably surface an Ethereum
+ * identifier for inboxes that were registered elsewhere first, so we
+ * maintain the mapping ourselves for Dappcon attendees.
+ */
+async function registerInboxMapping(
+  address: `0x${string}`,
+  inboxId: string,
+): Promise<void> {
+  try {
+    const { authedFetch } = await import("@/lib/api");
+    await authedFetch(address, "/api/me/xmtp-inbox", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ inboxId }),
+    });
+  } catch (err) {
+    console.warn("[xmtp] inbox mapping POST failed:", err);
+  }
+}
+
 function getEnv(): XmtpEnv {
   const v = process.env.NEXT_PUBLIC_XMTP_ENV;
   if (v === "dev" || v === "production" || v === "local") return v;
@@ -135,6 +157,9 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
         }
         clientAddressRef.current = addr;
         setStatus({ kind: "ready", client, inboxId });
+        // Record the inbox→address mapping server-side so peers can reverse
+        // it. Fire-and-forget; not a fatal failure if it 4xxs.
+        void registerInboxMapping(addr, inboxId);
         return true;
       } catch (err) {
         // Common cause: local OPFS database doesn't exist (cleared browser
@@ -215,6 +240,7 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
       }
       clientAddressRef.current = address;
       setStatus({ kind: "ready", client, inboxId });
+      void registerInboxMapping(address as `0x${string}`, inboxId);
       return true;
     } catch (err) {
       console.error("[xmtp] Client.create failed:", err);

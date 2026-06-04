@@ -13,13 +13,27 @@ import {
  * in SQL — `lib/addr.normalizeAddress` runs at every API boundary.
  */
 
-export const attendees = pgTable("attendees", {
-  address: text("address").primaryKey(),
-  mode: text("mode").notNull(), // "in-person" | "online"
-  bio: text("bio").notNull().default(""),
-  interests: jsonb("interests").$type<string[]>().notNull().default([]),
-  registeredAt: bigint("registered_at", { mode: "number" }).notNull(),
-});
+export const attendees = pgTable(
+  "attendees",
+  {
+    address: text("address").primaryKey(),
+    mode: text("mode").notNull(), // "in-person" | "online"
+    bio: text("bio").notNull().default(""),
+    interests: jsonb("interests").$type<string[]>().notNull().default([]),
+    registeredAt: bigint("registered_at", { mode: "number" }).notNull(),
+    /**
+     * The attendee's XMTP inbox ID, captured the first time their browser
+     * successfully attaches via the XMTP provider. Lets us reverse a peer
+     * inbox ID back to a Circles address without depending on XMTP's
+     * preferences API, which doesn't always surface Ethereum identifiers
+     * for inboxes that were registered elsewhere first.
+     */
+    xmtpInboxId: text("xmtp_inbox_id"),
+  },
+  (t) => ({
+    byXmtpInboxId: index("attendees_xmtp_inbox_id_idx").on(t.xmtpInboxId),
+  }),
+);
 
 export const settings = pgTable("settings", {
   address: text("address").primaryKey(),

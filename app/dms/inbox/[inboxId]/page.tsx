@@ -8,6 +8,7 @@ import { EnableDmsCard } from "@/components/dms/EnableDmsCard";
 import { SessionGate } from "@/components/auth/SessionGate";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useXmtp } from "@/components/xmtp/XmtpProvider";
+import { authedFetch } from "@/lib/api";
 import { resolvePeerAddressFromInboxId } from "@/lib/xmtp/dms";
 
 /**
@@ -26,12 +27,37 @@ export default function DmThreadByInboxPage({
   const { inboxId } = use(params);
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-4">
-      <SessionGate>{() => <InboxResolver inboxId={inboxId} />}</SessionGate>
+      <SessionGate>
+        {({ address: me }) => <InboxResolver me={me} inboxId={inboxId} />}
+      </SessionGate>
     </div>
   );
 }
 
-function InboxResolver({ inboxId }: { inboxId: string }) {
+async function resolveViaBackend(
+  me: `0x${string}`,
+  inboxId: string,
+): Promise<`0x${string}` | null> {
+  try {
+    const res = await authedFetch(
+      me,
+      `/api/xmtp/inbox/${encodeURIComponent(inboxId)}`,
+    );
+    if (!res.ok) return null;
+    const json = (await res.json()) as { address: string | null };
+    return (json.address as `0x${string}` | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function InboxResolver({
+  me,
+  inboxId,
+}: {
+  me: `0x${string}`;
+  inboxId: string;
+}) {
   const { status } = useXmtp();
   const router = useRouter();
   const [phase, setPhase] = useState<
@@ -43,10 +69,10 @@ function InboxResolver({ inboxId }: { inboxId: string }) {
     const client = status.client;
     let cancelled = false;
 
-    // Retry with exponential-ish backoff because the peer's identifier may
-    // need a few seconds to surface on the network after a first-contact
-    // DM. Total wall time ~30s. We also sync the conversation list once
-    // before each attempt so getDmByInboxId works as a secondary path.
+    // Retry with backoff. Primary path is the backend lookup (our own
+    // inbox→address mapping, populated when each attendee enables XMTP);
+    // XMTP-API paths are fallbacks for the rare case where the peer
+    // hasn't reopened the app since we started recording the mapping.
     const delaysMs = [0, 1_500, 3_000, 5_000, 10_000];
 
     (async () => {
@@ -56,10 +82,16 @@ function InboxResolver({ inboxId }: { inboxId: string }) {
         if (delay > 0) await new Promise((r) => setTimeout(r, delay));
         if (cancelled) return;
         try {
-          await client.conversations.sync().catch(() => undefined);
-          let addr = await resolvePeerAddressFromInboxId(client, inboxId);
-          // Second path: walk the DM directly. members() can surface the
-          // address when preferences hasn't refreshed yet.
+          // 1) Server-side mapping — deterministic for Dappcon attendees
+          //    who have enabled XMTP since the column was added.
+          let addr = await resolveViaBackend(me, inboxId);
+
+          // 2) XMTP preferences API + recoveryIdentifier fallback.
+          if (!addr) {
+            await client.conversations.sync().catch(() => undefined);
+            addr = await resolvePeerAddressFromInboxId(client, inboxId);
+          }
+          // 3) Walk the DM members map directly.
           if (!addr) {
             try {
               const dm = await client.conversations.getDmByInboxId(inboxId);
@@ -90,7 +122,7 @@ function InboxResolver({ inboxId }: { inboxId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [status, inboxId, router]);
+  }, [status, inboxId, me, router]);
 
   if (status.kind !== "ready") {
     return (

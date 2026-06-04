@@ -104,7 +104,6 @@ export function ConversationList({ me }: { me: `0x${string}` }) {
 }
 
 function XmtpInbox({ me }: { me: `0x${string}` }) {
-  void me;
   const { status } = useXmtp();
   const [rows, setRows] = useState<Map<string, Row>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -125,6 +124,7 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
         const next = new Map<string, Row>();
         for (const s of summaries) next.set(s.conversationId, { ...s, profile: null });
         setRows(next);
+        await resolveMissingAddressesViaBackend(me, next, setRows);
         await hydrateProfiles(next, setRows);
 
         cleanupStreams = await streamAllDmUpdates(
@@ -198,17 +198,16 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
       cancelled = true;
       cleanupStreams?.();
     };
-  }, [status]);
+  }, [status, me]);
 
   // Safety net: periodically re-list DMs in case the streams missed
   // something (network flake, browser throttle, fresh first-contact race).
   // Cheap because XMTP listDms is local + the sync is incremental.
   //
-  // Also self-heals two stale states from the first listing: rows whose
-  // peerAddress was null because the peer's identifier hadn't synced yet
-  // (now resolved via the network-refresh fallback in `peerAddressOf`),
-  // and rows whose Circles profile was never fetched because the address
-  // didn't exist at mount time.
+  // Also self-heals stale rows: rows whose peerAddress was null because
+  // XMTP didn't surface an Ethereum identifier (now resolved server-side
+  // via our own inbox→address mapping), and rows whose Circles profile
+  // was never fetched because the address didn't exist at mount time.
   usePolling(async () => {
     if (status.kind !== "ready") return;
     try {
@@ -218,8 +217,6 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
         const next = new Map(prev);
         for (const s of summaries) {
           const existing = next.get(s.conversationId);
-          // Preserve cached profile only when the peer hasn't changed —
-          // otherwise drop it so hydrateProfiles re-fetches the new one.
           const keepProfile =
             existing?.peerAddress &&
             existing.peerAddress === s.peerAddress;
@@ -231,7 +228,10 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
         updated = next;
         return next;
       });
-      if (updated) await hydrateProfiles(updated, setRows);
+      if (updated) {
+        await resolveMissingAddressesViaBackend(me, updated, setRows);
+        await hydrateProfiles(updated, setRows);
+      }
     } catch {
       /* non-fatal */
     }
@@ -359,6 +359,69 @@ function GateCard({
       </p>
     </section>
   );
+}
+
+/**
+ * For rows that lack a peerAddress (XMTP's preferences API didn't surface
+ * an Ethereum identifier), ask our backend for the mapping it stored when
+ * the peer enabled XMTP. Mutates `rows` in place so a follow-up
+ * hydrateProfiles call picks up the new addresses.
+ */
+async function resolveMissingAddressesViaBackend(
+  me: `0x${string}`,
+  rows: Map<string, Row>,
+  setRows: (
+    update: (prev: Map<string, Row>) => Map<string, Row>,
+  ) => void,
+): Promise<void> {
+  const unresolved: Array<{ convId: string; inboxId: string }> = [];
+  for (const row of rows.values()) {
+    if (!row.peerAddress && row.peerInboxId) {
+      unresolved.push({
+        convId: row.conversationId,
+        inboxId: row.peerInboxId,
+      });
+    }
+  }
+  if (unresolved.length === 0) return;
+  const updates = await Promise.all(
+    unresolved.map(async ({ convId, inboxId }) => {
+      try {
+        const res = await authedFetch(
+          me,
+          `/api/xmtp/inbox/${encodeURIComponent(inboxId)}`,
+        );
+        if (!res.ok) return null;
+        const json = (await res.json()) as { address: string | null };
+        if (!json.address) return null;
+        return { convId, address: json.address as `0x${string}` };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const resolved = updates.filter(
+    (u): u is { convId: string; address: `0x${string}` } => u !== null,
+  );
+  if (resolved.length === 0) return;
+  // Apply to the local in-flight map so the caller's follow-up
+  // hydrateProfiles call uses the addresses immediately.
+  for (const { convId, address } of resolved) {
+    const row = rows.get(convId);
+    if (row) rows.set(convId, { ...row, peerAddress: address });
+  }
+  // And to React state so the row text/link updates without waiting for
+  // the next poll.
+  setRows((prev) => {
+    const next = new Map(prev);
+    for (const { convId, address } of resolved) {
+      const row = next.get(convId);
+      if (row && !row.peerAddress) {
+        next.set(convId, { ...row, peerAddress: address });
+      }
+    }
+    return next;
+  });
 }
 
 async function hydrateProfiles(
