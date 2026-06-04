@@ -47,6 +47,7 @@ export async function GET(
     hopsFromMe: distance,
     theirDmHops: theirSettings.dmHops,
     myDmHops: mySettings.dmHops,
+    myDmFilterOn: mySettings.dmFilterOn,
     canDm,
   });
 }

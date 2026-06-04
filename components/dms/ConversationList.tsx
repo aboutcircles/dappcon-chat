@@ -27,19 +27,25 @@ import {
 
 type Row = DmSummary & { profile: ProfileCard | null };
 
+const OFF_POSITION = MAX_HOPS + 1;
+
 export function ConversationList({ me }: { me: `0x${string}` }) {
   void me; // present for symmetry with the rest of the surface contracts
   const { address } = useWallet();
   const { data: meData, refresh: refreshMe } = useSession(me);
   const { status } = useXmtp();
 
-  // DM-gate slider mirrors the wall pattern: debounced save to /api/settings.
+  // DM-gate slider mirrors the wall pattern: 1..MAX_HOPS is "filter on at N
+  // hops"; the rightmost stop (MAX_HOPS + 1) toggles the filter off so anyone
+  // can DM you regardless of distance. Debounced save to /api/settings.
   const [dmHops, setDmHops] = useState<number>(2);
+  const [filterOn, setFilterOn] = useState(true);
   const seededRef = useRef(false);
   useEffect(() => {
     if (seededRef.current) return;
     if (meData?.settings) {
       setDmHops(meData.settings.dmHops);
+      setFilterOn(meData.settings.dmFilterOn ?? true);
       seededRef.current = true;
     }
   }, [meData?.settings]);
@@ -51,19 +57,34 @@ export function ConversationList({ me }: { me: `0x${string}` }) {
       void authedFetch(me, "/api/settings", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ dmHops }),
+        body: JSON.stringify({ dmHops, dmFilterOn: filterOn }),
       }).then(() => refreshMe());
     }, 600);
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [dmHops, me, refreshMe]);
+  }, [dmHops, filterOn, me, refreshMe]);
+
+  const sliderValue = filterOn ? dmHops : OFF_POSITION;
+  function onSliderChange(v: number) {
+    if (v >= OFF_POSITION) {
+      setFilterOn(false);
+    } else {
+      setFilterOn(true);
+      setDmHops(v);
+    }
+  }
 
   if (!address) return null;
   if (status.kind !== "ready") {
     return (
       <div className="flex flex-col gap-5">
-        <GateCard hops={dmHops} onChange={setDmHops} />
+        <GateCard
+          sliderValue={sliderValue}
+          onChange={onSliderChange}
+          filterOn={filterOn}
+          hops={dmHops}
+        />
         <EnableDmsCard />
       </div>
     );
@@ -71,7 +92,12 @@ export function ConversationList({ me }: { me: `0x${string}` }) {
 
   return (
     <div className="flex flex-col gap-5">
-      <GateCard hops={dmHops} onChange={setDmHops} />
+      <GateCard
+        sliderValue={sliderValue}
+        onChange={onSliderChange}
+        filterOn={filterOn}
+        hops={dmHops}
+      />
       <XmtpInbox me={me} />
     </div>
   );
@@ -144,7 +170,7 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
                   msg.senderInboxId,
                 );
                 if (dm) {
-                  const s = await summarizeDm(dm);
+                  const s = await summarizeDm(dm, client);
                   if (s) {
                     setRows((prev) => {
                       const m = new Map(prev);
@@ -177,22 +203,35 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
   // Safety net: periodically re-list DMs in case the streams missed
   // something (network flake, browser throttle, fresh first-contact race).
   // Cheap because XMTP listDms is local + the sync is incremental.
+  //
+  // Also self-heals two stale states from the first listing: rows whose
+  // peerAddress was null because the peer's identifier hadn't synced yet
+  // (now resolved via the network-refresh fallback in `peerAddressOf`),
+  // and rows whose Circles profile was never fetched because the address
+  // didn't exist at mount time.
   usePolling(async () => {
     if (status.kind !== "ready") return;
     try {
       const summaries = await listAllDms(status.client);
+      let updated: Map<string, Row> | null = null;
       setRows((prev) => {
         const next = new Map(prev);
         for (const s of summaries) {
           const existing = next.get(s.conversationId);
-          // Don't overwrite the lazy-loaded profile.
+          // Preserve cached profile only when the peer hasn't changed —
+          // otherwise drop it so hydrateProfiles re-fetches the new one.
+          const keepProfile =
+            existing?.peerAddress &&
+            existing.peerAddress === s.peerAddress;
           next.set(s.conversationId, {
             ...s,
-            profile: existing?.profile ?? null,
+            profile: keepProfile ? existing.profile : null,
           });
         }
+        updated = next;
         return next;
       });
+      if (updated) await hydrateProfiles(updated, setRows);
     } catch {
       /* non-fatal */
     }
@@ -279,12 +318,22 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
 }
 
 function GateCard({
-  hops,
+  sliderValue,
   onChange,
+  filterOn,
+  hops,
 }: {
-  hops: number;
+  sliderValue: number;
   onChange: (v: number) => void;
+  filterOn: boolean;
+  hops: number;
 }) {
+  const label = filterOn
+    ? `Within ${hops} ${hops === 1 ? "hop" : "hops"}`
+    : "Anyone";
+  const headline = filterOn
+    ? `Only initiate DMs with people within ${hops} ${hops === 1 ? "hop" : "hops"} of you`
+    : "Open to DMs from anyone";
   return (
     <section className="rounded-[20px] bg-surface p-5 shadow-card space-y-4">
       <div className="flex items-baseline justify-between gap-3">
@@ -292,23 +341,21 @@ function GateCard({
           <p className="text-xs uppercase tracking-[0.14em] text-ink-muted">
             Initiation filter
           </p>
-          <Label className="text-base font-semibold">
-            Only initiate DMs with people within {hops}{" "}
-            {hops === 1 ? "hop" : "hops"} of you
-          </Label>
+          <Label className="text-base font-semibold">{headline}</Label>
         </div>
-        <span className="font-mono text-base">{hops}h</span>
+        <span className="font-mono text-base">{label}</span>
       </div>
       <Slider
-        value={[hops]}
+        value={[sliderValue]}
         min={1}
-        max={MAX_HOPS}
+        max={OFF_POSITION}
         step={1}
         onValueChange={(v) => onChange(Array.isArray(v) ? (v[0] ?? 2) : v)}
       />
       <p className="text-xs text-ink-muted">
-        Once a conversation is started, both directions are open. Saved
-        automatically.
+        Rightmost stop is <em>Anyone</em> — open to DMs regardless of
+        trust-graph distance. Once a conversation is started, both directions
+        are open. Saved automatically.
       </p>
     </section>
   );
@@ -320,9 +367,10 @@ async function hydrateProfiles(
     update: (prev: Map<string, Row>) => Map<string, Row>,
   ) => void,
 ): Promise<void> {
+  // Skip rows we already have a profile for — keeps the polling tick cheap.
   const addresses: `0x${string}`[] = [];
   for (const row of initial.values()) {
-    if (row.peerAddress) addresses.push(row.peerAddress);
+    if (row.peerAddress && !row.profile) addresses.push(row.peerAddress);
   }
   if (addresses.length === 0) return;
   try {

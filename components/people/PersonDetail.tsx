@@ -21,6 +21,7 @@ type Response = {
   hopsFromMe: number | null;
   theirDmHops: number;
   myDmHops: number;
+  myDmFilterOn: boolean;
   canDm: boolean;
 };
 
@@ -143,8 +144,12 @@ function DmGate({ data }: { data: Response }) {
   // New rule (post-XMTP): a DM is initiated by ME, so it's MY dmHops setting
   // that gates it — not theirs. Once a conversation exists, both directions
   // are always allowed (XMTP itself doesn't enforce a hop policy).
+  //
+  // When my filter is off (slider at the "Anyone" stop), I can initiate
+  // regardless of trust-graph distance.
   const canInitiate =
-    data.hopsFromMe !== null && data.hopsFromMe <= data.myDmHops;
+    !data.myDmFilterOn ||
+    (data.hopsFromMe !== null && data.hopsFromMe <= data.myDmHops);
 
   if (canInitiate) {
     return (

@@ -17,6 +17,12 @@ export type Settings = {
    */
   feedFilterOn: boolean;
   dmHops: number;
+  /**
+   * Whether the DM initiation filter is on. When false you can start a
+   * conversation with anyone regardless of trust-graph distance — the "All"
+   * position of the DM slider.
+   */
+  dmFilterOn: boolean;
 };
 
 export type Post = {

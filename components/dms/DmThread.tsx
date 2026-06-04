@@ -58,6 +58,7 @@ export function DmThread({
       peerAddress={peerAddress}
       myInboxId={status.inboxId}
       myDmHops={meData?.settings?.dmHops ?? 2}
+      myDmFilterOn={meData?.settings?.dmFilterOn ?? true}
     />
   );
 }
@@ -67,11 +68,13 @@ function XmtpThread({
   peerAddress,
   myInboxId,
   myDmHops,
+  myDmFilterOn,
 }: {
   me: `0x${string}`;
   peerAddress: string;
   myInboxId: string;
   myDmHops: number;
+  myDmFilterOn: boolean;
 }) {
   const { status } = useXmtp();
   const [conv, setConv] = useState<Dm | null>(null);
@@ -186,8 +189,10 @@ function XmtpThread({
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages.length]);
 
+  // No filter ⇒ never block initiation. With filter on, block when we don't
+  // yet have a conversation AND the peer is unreachable / outside the cap.
   const blockedAtInit =
-    !conv && (peerHops === null || peerHops > myDmHops);
+    !conv && myDmFilterOn && (peerHops === null || peerHops > myDmHops);
 
   const canSend = useMemo(() => !!conv && !sending && !!draft.trim(), [
     conv,

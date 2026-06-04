@@ -62,27 +62,77 @@ function isText(msg: DecodedMessage): boolean {
   return !!msg.contentType && contentTypesAreEqual(msg.contentType, ContentTypeText);
 }
 
-async function peerAddressOf(conv: Dm): Promise<`0x${string}` | null> {
+/**
+ * Resolve `inboxId` → Ethereum address via the preferences cache, falling
+ * back to a network refresh. Returns null only when XMTP genuinely has no
+ * Ethereum identifier on file for the inbox (extremely rare — the inbox
+ * has to be registered with something to receive messages).
+ */
+export async function resolvePeerAddressFromInboxId(
+  client: Client,
+  inboxId: string,
+): Promise<`0x${string}` | null> {
+  // Try the local cache first; fall back to a network refresh when the
+  // identifier isn't there yet (common for freshly streamed-in DMs).
+  const lookups: Array<() => Promise<unknown>> = [
+    () => client.preferences.getInboxStates([inboxId]),
+    () => client.preferences.fetchInboxStates([inboxId]),
+  ];
+  for (const lookup of lookups) {
+    try {
+      const states = (await lookup()) as Array<{
+        accountIdentifiers?: Array<{
+          identifier: string;
+          identifierKind: IdentifierKind;
+        }>;
+      }>;
+      const id = states[0]?.accountIdentifiers?.find(
+        (i) => i.identifierKind === IdentifierKind.Ethereum,
+      )?.identifier;
+      if (id) return normalizeAddress(id);
+    } catch (err) {
+      console.warn("[xmtp] inbox-state lookup failed:", err);
+    }
+  }
+  return null;
+}
+
+async function peerAddressOf(
+  conv: Dm,
+  client?: Client,
+): Promise<`0x${string}` | null> {
+  let peerInboxId: string | null = null;
   try {
     const members = await conv.members();
-    const peerInboxId = await conv.peerInboxId().catch(() => null);
+    peerInboxId = await conv.peerInboxId().catch(() => null);
     const peer = peerInboxId
       ? members.find((m) => m.inboxId === peerInboxId)
       : null;
-    const id = peer?.accountIdentifiers?.[0]?.identifier;
-    return id ? normalizeAddress(id) : null;
+    const id = peer?.accountIdentifiers?.find(
+      (i) => i.identifierKind === IdentifierKind.Ethereum,
+    )?.identifier;
+    if (id) return normalizeAddress(id);
   } catch (err) {
-    console.warn("[xmtp] peerAddressOf failed:", err);
-    return null;
+    console.warn("[xmtp] peerAddressOf (members) failed:", err);
   }
+  // Members map didn't carry an Ethereum identifier yet (common on a
+  // freshly streamed-in first-contact DM where the peer's identity hasn't
+  // synced locally). Ask the network directly.
+  if (client && peerInboxId) {
+    return resolvePeerAddressFromInboxId(client, peerInboxId);
+  }
+  return null;
 }
 
-export async function summarizeDm(conv: Dm): Promise<DmSummary | null> {
+export async function summarizeDm(
+  conv: Dm,
+  client?: Client,
+): Promise<DmSummary | null> {
   try {
     const [peerInboxId, lastMessage, peerAddress] = await Promise.all([
       conv.peerInboxId().catch(() => null),
       conv.lastMessage().catch(() => undefined),
-      peerAddressOf(conv),
+      peerAddressOf(conv, client),
     ]);
     if (!peerInboxId) return null;
     const text = lastMessage && isText(lastMessage) ? getMessageText(lastMessage) : null;
@@ -104,7 +154,7 @@ export async function summarizeDm(conv: Dm): Promise<DmSummary | null> {
 export async function listAllDms(client: Client): Promise<DmSummary[]> {
   await client.conversations.sync();
   const convos = await client.conversations.listDms();
-  const summaries = await Promise.all(convos.map((c) => summarizeDm(c)));
+  const summaries = await Promise.all(convos.map((c) => summarizeDm(c, client)));
   return summaries.filter((s): s is DmSummary => s !== null);
 }
 
@@ -191,7 +241,7 @@ export async function streamAllDmUpdates(
   const convStream = await client.conversations.streamDms({
     onValue: async (dm) => {
       console.debug("[xmtp] streamDms fired:", dm?.id);
-      const s = await summarizeDm(dm);
+      const s = await summarizeDm(dm, client);
       if (s) onConvChange(s);
     },
     onError: (e) => console.warn("[xmtp] streamDms error:", e),

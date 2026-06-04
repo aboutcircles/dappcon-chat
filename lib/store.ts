@@ -30,6 +30,7 @@ function defaultSettings(address: `0x${string}`): Settings {
     feedHops: DEFAULT_HOPS,
     feedFilterOn: true,
     dmHops: DEFAULT_HOPS,
+    dmFilterOn: true,
   };
 }
 
@@ -121,12 +122,18 @@ export async function getSettings(
     feedHops: row.feedHops,
     feedFilterOn: row.feedFilterOn,
     dmHops: row.dmHops,
+    dmFilterOn: row.dmFilterOn,
   };
 }
 
 export async function updateSettings(
   address: `0x${string}`,
-  patch: { feedHops?: number; feedFilterOn?: boolean; dmHops?: number },
+  patch: {
+    feedHops?: number;
+    feedFilterOn?: boolean;
+    dmHops?: number;
+    dmFilterOn?: boolean;
+  },
 ): Promise<Settings> {
   const existing = await getSettings(address);
   const next: Settings = {
@@ -137,6 +144,10 @@ export async function updateSettings(
         ? patch.feedFilterOn
         : existing.feedFilterOn,
     dmHops: clampHops(patch.dmHops, existing.dmHops),
+    dmFilterOn:
+      typeof patch.dmFilterOn === "boolean"
+        ? patch.dmFilterOn
+        : existing.dmFilterOn,
   };
   await db()
     .insert(schema.settings)
@@ -147,6 +158,7 @@ export async function updateSettings(
         feedHops: next.feedHops,
         feedFilterOn: next.feedFilterOn,
         dmHops: next.dmHops,
+        dmFilterOn: next.dmFilterOn,
       },
     });
   return next;

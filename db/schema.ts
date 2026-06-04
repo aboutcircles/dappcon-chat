@@ -26,6 +26,9 @@ export const settings = pgTable("settings", {
   feedHops: integer("feed_hops").notNull(),
   feedFilterOn: boolean("feed_filter_on").notNull(),
   dmHops: integer("dm_hops").notNull(),
+  // Defaults to true via SQL so existing rows + backfills keep the
+  // pre-change behaviour ("filter on" = enforce hop limit).
+  dmFilterOn: boolean("dm_filter_on").notNull().default(true),
 });
 
 export const posts = pgTable(
