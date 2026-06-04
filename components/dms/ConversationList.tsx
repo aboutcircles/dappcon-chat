@@ -17,6 +17,9 @@ import { useSession } from "@/hooks/use-session";
 import { authedFetch } from "@/lib/api";
 import { MAX_HOPS } from "@/lib/constants";
 import { type ProfileCard } from "@/lib/profile-fetch";
+import type { Attendee } from "@/lib/types";
+import type { Client } from "@xmtp/browser-sdk";
+import { IdentifierKind } from "@xmtp/browser-sdk";
 import {
   listAllDms,
   streamAllDmUpdates,
@@ -125,6 +128,7 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
         for (const s of summaries) next.set(s.conversationId, { ...s, profile: null });
         setRows(next);
         await resolveMissingAddressesViaBackend(me, next, setRows);
+        await crowdsourceUnresolvedFromAttendees(me, client, next, setRows);
         await hydrateProfiles(next, setRows);
 
         cleanupStreams = await streamAllDmUpdates(
@@ -422,6 +426,97 @@ async function resolveMissingAddressesViaBackend(
     }
     return next;
   });
+}
+
+/**
+ * Last-resort backfill for rows whose peerAddress is still null after the
+ * backend lookup: walk the Dappcon attendee directory and ask XMTP for
+ * each attendee's inbox ID via the *address → inbox* direction
+ * (`fetchInboxIdByIdentifier` — doesn't trigger the EIP-1271 verify path
+ * that breaks for Safe-signed peers). When an attendee's derived inbox
+ * matches an unresolved row, record the mapping locally + POST it to the
+ * backend so future sessions can resolve it without redoing the work.
+ */
+async function crowdsourceUnresolvedFromAttendees(
+  me: `0x${string}`,
+  client: Client,
+  rows: Map<string, Row>,
+  setRows: (
+    update: (prev: Map<string, Row>) => Map<string, Row>,
+  ) => void,
+): Promise<void> {
+  const unresolvedByInbox = new Map<string, string[]>(); // inboxId → conversationIds
+  for (const row of rows.values()) {
+    if (!row.peerAddress && row.peerInboxId) {
+      const list = unresolvedByInbox.get(row.peerInboxId) ?? [];
+      list.push(row.conversationId);
+      unresolvedByInbox.set(row.peerInboxId, list);
+    }
+  }
+  if (unresolvedByInbox.size === 0) return;
+  let attendees: (Attendee & { xmtpInboxId: string | null })[];
+  try {
+    const res = await authedFetch(me, "/api/people");
+    if (!res.ok) return;
+    const json = (await res.json()) as {
+      attendees: (Attendee & { xmtpInboxId: string | null })[];
+    };
+    attendees = json.attendees;
+  } catch {
+    return;
+  }
+  // Prefer attendees we don't already have a mapping for — those are the
+  // candidates that could fill the gap. (If the backend already had a
+  // mapping, resolveMissingAddressesViaBackend would have used it.)
+  const candidates = attendees.filter(
+    (a) => !a.xmtpInboxId && a.address !== me,
+  );
+  const discovered: Array<{ address: `0x${string}`; inboxId: string }> = [];
+  for (const attendee of candidates) {
+    if (unresolvedByInbox.size === 0) break;
+    let inboxId: string | undefined;
+    try {
+      inboxId = await client.fetchInboxIdByIdentifier({
+        identifier: attendee.address.toLowerCase(),
+        identifierKind: IdentifierKind.Ethereum,
+      });
+    } catch (err) {
+      console.warn("[xmtp] fetchInboxIdByIdentifier failed:", err);
+      continue;
+    }
+    if (!inboxId) continue;
+    const convIds = unresolvedByInbox.get(inboxId);
+    if (convIds) {
+      discovered.push({ address: attendee.address, inboxId });
+      unresolvedByInbox.delete(inboxId);
+      // Apply to the in-flight map so hydrateProfiles can use it next.
+      for (const convId of convIds) {
+        const row = rows.get(convId);
+        if (row) rows.set(convId, { ...row, peerAddress: attendee.address });
+      }
+    }
+  }
+  if (discovered.length === 0) return;
+  setRows((prev) => {
+    const next = new Map(prev);
+    for (const { address, inboxId } of discovered) {
+      for (const row of next.values()) {
+        if (!row.peerAddress && row.peerInboxId === inboxId) {
+          next.set(row.conversationId, { ...row, peerAddress: address });
+        }
+      }
+    }
+    return next;
+  });
+  // Crowdsource: tell the backend so the next user doesn't have to do this
+  // walk. Fire-and-forget.
+  for (const { address, inboxId } of discovered) {
+    void authedFetch(me, "/api/xmtp/inbox-claim", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ address, inboxId }),
+    }).catch(() => undefined);
+  }
 }
 
 async function hydrateProfiles(
