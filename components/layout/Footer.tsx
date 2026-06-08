@@ -1,4 +1,4 @@
-const REPO_URL = "https://github.com/aboutcircles/embedded-miniapp-boilerplate"; // TODO: swap for the Dappcon Chat fork once published
+const REPO_URL = "https://github.com/aboutcircles/dappcon-chat";
 
 export function Footer() {
   return (
