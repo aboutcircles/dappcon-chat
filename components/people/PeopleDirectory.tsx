@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
 import { ProfileName } from "@/components/profile/ProfileName";
@@ -31,6 +32,7 @@ export function PeopleDirectory({ me }: { me: `0x${string}` }) {
   const [loading, setLoading] = useState(true);
   const [inPersonOnly, setInPersonOnly] = useState(false);
   const [tagFilter, setTagFilter] = useState<TagOption[]>([]);
+  const [query, setQuery] = useState("");
 
   function toggleTag(tag: TagOption) {
     setTagFilter((prev) =>
@@ -72,6 +74,17 @@ export function PeopleDirectory({ me }: { me: `0x${string}` }) {
         a.interests.some((i) => tagFilter.includes(i as TagOption)),
       );
     }
+    const q = query.trim().toLowerCase();
+    if (q.length > 0) {
+      filtered = filtered.filter((a) => {
+        if (a.address.toLowerCase().includes(q)) return true;
+        if (a.profile?.name?.toLowerCase().includes(q)) return true;
+        if (a.bio?.toLowerCase().includes(q)) return true;
+        if (a.profile?.description?.toLowerCase().includes(q)) return true;
+        if (a.interests.some((i) => i.toLowerCase().includes(q))) return true;
+        return false;
+      });
+    }
     return [...filtered].sort((a, b) => {
       // self first, then by hop distance ascending, unreachable last
       const ka = a.address === me ? -1 : a.hopsFromMe ?? VERY_FAR;
@@ -79,7 +92,7 @@ export function PeopleDirectory({ me }: { me: `0x${string}` }) {
       if (ka !== kb) return ka - kb;
       return a.registeredAt - b.registeredAt;
     });
-  }, [data, inPersonOnly, tagFilter, me]);
+  }, [data, inPersonOnly, tagFilter, query, me]);
 
   if (loading) {
     return (
@@ -92,11 +105,19 @@ export function PeopleDirectory({ me }: { me: `0x${string}` }) {
   }
   if (!data) return null;
 
-  const someoneIsFiltered = inPersonOnly || tagFilter.length > 0;
+  const someoneIsFiltered =
+    inPersonOnly || tagFilter.length > 0 || query.trim().length > 0;
 
   return (
     <div className="space-y-4">
       <div className="rounded-[20px] bg-surface p-4 shadow-card space-y-3">
+        <Input
+          type="search"
+          placeholder="Search by name, bio, address, or interest…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="Search participants"
+        />
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm font-semibold">Filter by</p>
           {someoneIsFiltered && (
@@ -105,6 +126,7 @@ export function PeopleDirectory({ me }: { me: `0x${string}` }) {
               onClick={() => {
                 setInPersonOnly(false);
                 setTagFilter([]);
+                setQuery("");
               }}
               className="text-xs text-ink-muted hover:text-ink"
             >
