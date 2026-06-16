@@ -312,3 +312,42 @@ export async function syncConv(conv: Dm): Promise<void> {
 }
 
 export { isText as isTextMessage };
+
+/* ---------- Inbox-filter rescue set ----------------------------------- */
+
+/**
+ * Conversations the user has actively engaged with — once you reply to a
+ * first-contact DM, it leaves the "Filtered" fold permanently for that
+ * device, even if the peer is technically outside your current hop range.
+ * Stored per-inbox so resetting XMTP state wipes it.
+ */
+function rescuedKey(myInboxId: string): string {
+  return `xmtp-rescued-${myInboxId}`;
+}
+
+export function loadRescuedConversations(myInboxId: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(rescuedKey(myInboxId));
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw) as string[]);
+  } catch {
+    return new Set();
+  }
+}
+
+export function markConversationRescued(
+  myInboxId: string,
+  conversationId: string,
+): void {
+  try {
+    const key = rescuedKey(myInboxId);
+    const raw = localStorage.getItem(key);
+    const arr = raw ? (JSON.parse(raw) as string[]) : [];
+    if (!arr.includes(conversationId)) {
+      arr.push(conversationId);
+      localStorage.setItem(key, JSON.stringify(arr));
+    }
+  } catch {
+    /* ignore — localStorage may be unavailable in some hosts */
+  }
+}

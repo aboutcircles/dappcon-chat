@@ -27,17 +27,18 @@ export async function GET(
     getSettings(session.address),
     getSettings(target),
   ]);
-  // The DM gate is set by the *recipient*; check distance up to that cap.
-  const dmCap = Math.max(theirSettings.dmHops, mySettings.dmHops);
+  // The DM gate is set by the *recipient* — their filter decides who is
+  // allowed to start a DM with them. We only BFS as far as their cap; anyone
+  // farther than that is out of range regardless.
   const distance =
     target === session.address
       ? 0
-      : await hopDistance(session.address, target, dmCap);
+      : await hopDistance(session.address, target, theirSettings.dmHops);
 
   const canDm =
     target !== session.address &&
-    distance !== null &&
-    distance <= theirSettings.dmHops;
+    (!theirSettings.dmFilterOn ||
+      (distance !== null && distance <= theirSettings.dmHops));
 
   return NextResponse.json({
     me: session.address,
@@ -46,6 +47,7 @@ export async function GET(
     attendee,
     hopsFromMe: distance,
     theirDmHops: theirSettings.dmHops,
+    theirDmFilterOn: theirSettings.dmFilterOn,
     myDmHops: mySettings.dmHops,
     myDmFilterOn: mySettings.dmFilterOn,
     canDm,

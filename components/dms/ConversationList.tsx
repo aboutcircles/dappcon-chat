@@ -22,6 +22,7 @@ import type { Client } from "@xmtp/browser-sdk";
 import { IdentifierKind } from "@xmtp/browser-sdk";
 import {
   listAllDms,
+  loadRescuedConversations,
   streamAllDmUpdates,
   summarizeDm,
   isTextMessage,
@@ -101,15 +102,38 @@ export function ConversationList({ me }: { me: `0x${string}` }) {
         filterOn={filterOn}
         hops={dmHops}
       />
-      <XmtpInbox me={me} />
+      <XmtpInbox me={me} dmHops={dmHops} filterOn={filterOn} />
     </div>
   );
 }
 
-function XmtpInbox({ me }: { me: `0x${string}` }) {
+function XmtpInbox({
+  me,
+  dmHops,
+  filterOn,
+}: {
+  me: `0x${string}`;
+  dmHops: number;
+  filterOn: boolean;
+}) {
   const { status } = useXmtp();
   const [rows, setRows] = useState<Map<string, Row>>(new Map());
   const [loading, setLoading] = useState(true);
+  // address → hopsFromMe map sourced from /api/people. Used to decide whether
+  // an inbound DM passes the inbox filter or gets folded.
+  const [peerHops, setPeerHops] = useState<Map<string, number | null>>(
+    new Map(),
+  );
+  // Conversations the user has actively replied to — they bypass the inbox
+  // filter for this device regardless of hop distance.
+  const [rescued, setRescued] = useState<Set<string>>(new Set());
+  const [filteredOpen, setFilteredOpen] = useState(false);
+
+  const myInboxId = status.kind === "ready" ? status.inboxId : null;
+  useEffect(() => {
+    if (!myInboxId) return;
+    setRescued(loadRescuedConversations(myInboxId));
+  }, [myInboxId]);
 
   // Don't render unless we actually have a client; the parent already checks
   // this but TS narrows better with a guard here.
@@ -127,6 +151,7 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
         const next = new Map<string, Row>();
         for (const s of summaries) next.set(s.conversationId, { ...s, profile: null });
         setRows(next);
+        await refreshPeerHops(me, setPeerHops);
         await resolveMissingAddressesViaBackend(me, next, setRows);
         await crowdsourceUnresolvedFromAttendees(me, client, next, setRows);
         await hydrateProfiles(next, setRows);
@@ -236,6 +261,7 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
         await resolveMissingAddressesViaBackend(me, updated, setRows);
         await hydrateProfiles(updated, setRows);
       }
+      await refreshPeerHops(me, setPeerHops);
     } catch {
       /* non-fatal */
     }
@@ -249,6 +275,28 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
     });
   }, [rows]);
 
+  // Partition into in-range vs filtered. A row is in-range when ANY of:
+  //   - the user turned the filter off
+  //   - the user has explicitly engaged with the convo (rescued set)
+  //   - the user sent the most recent message (legacy engagement signal —
+  //     covers conversations that pre-date the rescued set)
+  //   - the peer's distance is within my dmHops
+  const { inRange, filtered } = useMemo(() => {
+    const a: Row[] = [];
+    const b: Row[] = [];
+    for (const row of sorted) {
+      const passes =
+        !filterOn ||
+        rescued.has(row.conversationId) ||
+        (myInboxId !== null &&
+          row.lastMessageSenderInboxId === myInboxId) ||
+        isPeerInRange(row.peerAddress, peerHops, dmHops);
+      if (passes) a.push(row);
+      else b.push(row);
+    }
+    return { inRange: a, filtered: b };
+  }, [sorted, filterOn, rescued, myInboxId, peerHops, dmHops]);
+
   if (loading) {
     return (
       <div className="space-y-3">
@@ -259,8 +307,6 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
   }
 
   if (status.kind !== "ready") return null;
-
-  const myInboxId = status.inboxId;
 
   if (sorted.length === 0) {
     return (
@@ -275,50 +321,139 @@ function XmtpInbox({ me }: { me: `0x${string}` }) {
   }
 
   return (
-    <ul className="space-y-3">
-      {sorted.map((row) => (
-        <li key={row.conversationId}>
-          <Link
-            href={
-              row.peerAddress
-                ? `/dms/${row.peerAddress}`
-                : `/dms/inbox/${row.peerInboxId}`
-            }
-            className="flex items-center gap-3 rounded-[20px] bg-surface p-4 shadow-card transition-colors hover:bg-brand-tint/40"
+    <div className="space-y-4">
+      {inRange.length === 0 ? (
+        <p className="py-6 text-center text-sm text-ink-muted">
+          No conversations match your inbox filter.{" "}
+          {filtered.length > 0
+            ? `Expand "Filtered" below or widen the slider.`
+            : "Open someone's profile to start one."}
+        </p>
+      ) : (
+        <ul className="space-y-3">
+          {inRange.map((row) => (
+            <li key={row.conversationId}>
+              <ConversationRow row={row} myInboxId={myInboxId} />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {filtered.length > 0 && filterOn && (
+        <section className="rounded-[20px] bg-surface shadow-card">
+          <button
+            type="button"
+            onClick={() => setFilteredOpen((v) => !v)}
+            className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
           >
-            <ProfileAvatar
-              src={row.profile?.previewImageUrl ?? row.profile?.imageUrl}
-              name={row.profile?.name}
-              address={row.peerAddress ?? row.peerInboxId}
-              className="size-12"
-            />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="truncate text-[15px] font-semibold">
-                  {row.peerAddress ? (
-                    <ProfileName
-                      name={row.profile?.name}
-                      address={row.peerAddress}
-                    />
-                  ) : (
-                    row.peerInboxId.slice(0, 8) + "…"
-                  )}
-                </span>
-                <span className="font-mono text-xs text-ink-muted">
-                  {formatTime(row.lastMessageSentAtNs)}
-                </span>
-              </div>
-              <p className="line-clamp-1 text-sm text-ink-muted">
-                {row.lastMessageText
-                  ? `${row.lastMessageSenderInboxId === myInboxId ? "You: " : ""}${row.lastMessageText}`
-                  : "(no messages yet)"}
-              </p>
-            </div>
-          </Link>
-        </li>
-      ))}
-    </ul>
+            <span className="text-sm font-semibold">
+              Filtered ({filtered.length})
+            </span>
+            <span className="text-xs text-ink-muted">
+              {filteredOpen ? "Hide" : "Show"}
+            </span>
+          </button>
+          {filteredOpen && (
+            <ul className="space-y-3 px-3 pb-3">
+              {filtered.map((row) => (
+                <li key={row.conversationId}>
+                  <ConversationRow
+                    row={row}
+                    myInboxId={myInboxId}
+                    muted
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+    </div>
   );
+}
+
+function ConversationRow({
+  row,
+  myInboxId,
+  muted = false,
+}: {
+  row: Row;
+  myInboxId: string | null;
+  muted?: boolean;
+}) {
+  return (
+    <Link
+      href={
+        row.peerAddress
+          ? `/dms/${row.peerAddress}`
+          : `/dms/inbox/${row.peerInboxId}`
+      }
+      className={
+        "flex items-center gap-3 rounded-[20px] bg-surface p-4 shadow-card transition-colors hover:bg-brand-tint/40 " +
+        (muted ? "opacity-70 hover:opacity-100" : "")
+      }
+    >
+      <ProfileAvatar
+        src={row.profile?.previewImageUrl ?? row.profile?.imageUrl}
+        name={row.profile?.name}
+        address={row.peerAddress ?? row.peerInboxId}
+        className="size-12"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="truncate text-[15px] font-semibold">
+            {row.peerAddress ? (
+              <ProfileName
+                name={row.profile?.name}
+                address={row.peerAddress}
+              />
+            ) : (
+              row.peerInboxId.slice(0, 8) + "…"
+            )}
+          </span>
+          <span className="font-mono text-xs text-ink-muted">
+            {formatTime(row.lastMessageSentAtNs)}
+          </span>
+        </div>
+        <p className="line-clamp-1 text-sm text-ink-muted">
+          {row.lastMessageText
+            ? `${row.lastMessageSenderInboxId === myInboxId ? "You: " : ""}${row.lastMessageText}`
+            : "(no messages yet)"}
+        </p>
+      </div>
+    </Link>
+  );
+}
+
+function isPeerInRange(
+  peerAddress: `0x${string}` | null,
+  peerHops: Map<string, number | null>,
+  dmHops: number,
+): boolean {
+  if (!peerAddress) return false;
+  const h = peerHops.get(peerAddress.toLowerCase());
+  if (h == null) return false;
+  return h <= dmHops;
+}
+
+async function refreshPeerHops(
+  me: `0x${string}`,
+  setPeerHops: (map: Map<string, number | null>) => void,
+): Promise<void> {
+  try {
+    const res = await authedFetch(me, "/api/people");
+    if (!res.ok) return;
+    const json = (await res.json()) as {
+      attendees: { address: string; hopsFromMe: number | null }[];
+    };
+    const next = new Map<string, number | null>();
+    for (const a of json.attendees) {
+      next.set(a.address.toLowerCase(), a.hopsFromMe);
+    }
+    setPeerHops(next);
+  } catch {
+    /* non-fatal — partition just falls back to "out-of-range" until next tick */
+  }
 }
 
 function GateCard({
@@ -336,14 +471,14 @@ function GateCard({
     ? `Within ${hops} ${hops === 1 ? "hop" : "hops"}`
     : "Anyone";
   const headline = filterOn
-    ? `Only initiate DMs with people within ${hops} ${hops === 1 ? "hop" : "hops"} of you`
+    ? `Only let people within ${hops} ${hops === 1 ? "hop" : "hops"} of you start a DM`
     : "Open to DMs from anyone";
   return (
     <section className="rounded-[20px] bg-surface p-5 shadow-card space-y-4">
       <div className="flex items-baseline justify-between gap-3">
         <div>
           <p className="text-xs uppercase tracking-[0.14em] text-ink-muted">
-            Initiation filter
+            Inbox filter
           </p>
           <Label className="text-base font-semibold">{headline}</Label>
         </div>
@@ -357,9 +492,10 @@ function GateCard({
         onValueChange={(v) => onChange(Array.isArray(v) ? (v[0] ?? 2) : v)}
       />
       <p className="text-xs text-ink-muted">
-        Rightmost stop is <em>Anyone</em> — open to DMs regardless of
-        trust-graph distance. Once a conversation is started, both directions
-        are open. Saved automatically.
+        Decide who can start a DM with you. New conversations from people
+        further than this stay folded as <em>Filtered</em> below. Once you
+        reply, the conversation moves to your main list. Rightmost stop is{" "}
+        <em>Anyone</em>. Saved automatically.
       </p>
     </section>
   );

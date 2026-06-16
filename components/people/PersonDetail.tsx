@@ -20,6 +20,7 @@ type Response = {
   attendee: Attendee | null;
   hopsFromMe: number | null;
   theirDmHops: number;
+  theirDmFilterOn: boolean;
   myDmHops: number;
   myDmFilterOn: boolean;
   canDm: boolean;
@@ -141,17 +142,13 @@ export function PersonDetail({
 }
 
 function DmGate({ data }: { data: Response }) {
-  // New rule (post-XMTP): a DM is initiated by ME, so it's MY dmHops setting
-  // that gates it — not theirs. Once a conversation exists, both directions
-  // are always allowed (XMTP itself doesn't enforce a hop policy).
+  // The recipient's filter gates inbound DMs — when I open someone's profile,
+  // I see whether THEY allow me to start a conversation. (XMTP itself doesn't
+  // enforce a hop policy, but this is the in-app convention. Once a
+  // conversation exists, both directions are always open.)
   //
-  // When my filter is off (slider at the "Anyone" stop), I can initiate
-  // regardless of trust-graph distance.
-  const canInitiate =
-    !data.myDmFilterOn ||
-    (data.hopsFromMe !== null && data.hopsFromMe <= data.myDmHops);
-
-  if (canInitiate) {
+  // Use canDm from the API — it already accounts for "filter off" + distance.
+  if (data.canDm) {
     return (
       <Link
         href={`/dms/${data.target}`}
@@ -161,16 +158,17 @@ function DmGate({ data }: { data: Response }) {
       </Link>
     );
   }
+  const hops = data.theirDmHops;
   return (
     <div className="space-y-2 rounded-[20px] bg-surface p-4 text-sm shadow-card">
       <p className="font-semibold">
-        Outside your initiation filter
+        They aren&apos;t accepting DMs from here
       </p>
       <p className="text-ink-muted">
         {data.hopsFromMe == null
-          ? `You only initiate DMs within ${data.myDmHops} ${data.myDmHops === 1 ? "hop" : "hops"} of you, and there's no trust path within that range.`
-          : `You only initiate DMs within ${data.myDmHops} ${data.myDmHops === 1 ? "hop" : "hops"} of you — they're ${data.hopsFromMe} away.`}{" "}
-        Widen the slider on the DMs tab to message them, or post on the wall.
+          ? `They only accept DMs from people within ${hops} ${hops === 1 ? "hop" : "hops"} of them, and there's no trust path within that range.`
+          : `They only accept DMs from people within ${hops} ${hops === 1 ? "hop" : "hops"} of them — you're ${data.hopsFromMe} away.`}{" "}
+        Try posting on the wall to get on their radar.
       </p>
     </div>
   );

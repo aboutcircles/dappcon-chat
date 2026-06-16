@@ -11,7 +11,6 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useXmtp } from "@/components/xmtp/XmtpProvider";
-import { useSession } from "@/hooks/use-session";
 import { authedFetch } from "@/lib/api";
 import type { Dm } from "@xmtp/browser-sdk";
 import { fetchProfileCard, type ProfileCard } from "@/lib/profile-fetch";
@@ -19,6 +18,7 @@ import { usePolling } from "@/hooks/use-polling";
 import {
   isTextMessage,
   loadThreadMessages,
+  markConversationRescued,
   openOrCreateDm,
   sendText,
   streamThread,
@@ -34,7 +34,6 @@ export function DmThread({
   peerAddress: string;
 }) {
   const { status } = useXmtp();
-  const { data: meData } = useSession(me);
 
   // Mirror the wrapper page contract — let the user see what's behind the
   // signature wall before they commit to signing.
@@ -53,28 +52,25 @@ export function DmThread({
   }
 
   return (
-    <XmtpThread
-      me={me}
-      peerAddress={peerAddress}
-      myInboxId={status.inboxId}
-      myDmHops={meData?.settings?.dmHops ?? 2}
-      myDmFilterOn={meData?.settings?.dmFilterOn ?? true}
-    />
+    <XmtpThread me={me} peerAddress={peerAddress} myInboxId={status.inboxId} />
   );
 }
+
+type PeerGate = {
+  hopsFromMe: number | null;
+  theirDmHops: number;
+  theirDmFilterOn: boolean;
+  canDm: boolean;
+};
 
 function XmtpThread({
   me,
   peerAddress,
   myInboxId,
-  myDmHops,
-  myDmFilterOn,
 }: {
   me: `0x${string}`;
   peerAddress: string;
   myInboxId: string;
-  myDmHops: number;
-  myDmFilterOn: boolean;
 }) {
   const { status } = useXmtp();
   const [conv, setConv] = useState<Dm | null>(null);
@@ -84,7 +80,7 @@ function XmtpThread({
   const [peerProfile, setPeerProfile] = useState<ProfileCard | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [peerHops, setPeerHops] = useState<number | null>(null);
+  const [peerGate, setPeerGate] = useState<PeerGate | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const initRanForRef = useRef<string | null>(null);
 
@@ -93,19 +89,18 @@ function XmtpThread({
     void fetchProfileCard(peerAddress as `0x${string}`).then(setPeerProfile);
   }, [peerAddress]);
 
-  // Distance check — if the peer is OUTSIDE my filter AND we don't already
-  // have a conversation, block initiation. (`/api/people/[address]` already
-  // computes the directed hop from me.)
+  // Pull the peer's DM gate — their filter decides whether I'm allowed to
+  // initiate. The API already returns canDm with filter-off accounted for.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const res = await authedFetch(me, `/api/people/${peerAddress}`);
         if (!res.ok || cancelled) return;
-        const json = (await res.json()) as { hopsFromMe: number | null };
-        if (!cancelled) setPeerHops(json.hopsFromMe);
+        const json = (await res.json()) as PeerGate;
+        if (!cancelled) setPeerGate(json);
       } catch {
-        /* network failure — assume in-range to avoid false negative */
+        /* network failure — leave peerGate null; we'll fall back to "allow" */
       }
     })();
     return () => {
@@ -189,10 +184,9 @@ function XmtpThread({
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages.length]);
 
-  // No filter ⇒ never block initiation. With filter on, block when we don't
-  // yet have a conversation AND the peer is unreachable / outside the cap.
-  const blockedAtInit =
-    !conv && myDmFilterOn && (peerHops === null || peerHops > myDmHops);
+  // Block first-time initiation when the peer's own gate says no. Once a
+  // conversation already exists, both directions stay open regardless.
+  const blockedAtInit = !conv && peerGate !== null && !peerGate.canDm;
 
   const canSend = useMemo(() => !!conv && !sending && !!draft.trim(), [
     conv,
@@ -206,6 +200,9 @@ function XmtpThread({
     setSending(true);
     try {
       await sendText(conv, draft.trim());
+      // Once I reply, the convo escapes the inbox filter permanently for
+      // this device — even if the peer is "outside" my current dmHops.
+      markConversationRescued(myInboxId, conv.id);
       setDraft("");
       // Re-load from local state — sendText syncs the conversation, so this
       // pulls the just-sent message into our messages list immediately
@@ -302,18 +299,18 @@ function XmtpThread({
         )}
       </div>
 
-      {blockedAtInit ? (
+      {blockedAtInit && peerGate ? (
         <div className="rounded-[20px] bg-surface p-5 shadow-card space-y-2">
           <p className="text-sm font-semibold">
-            Outside your initiation filter
+            They aren&apos;t accepting DMs from here
           </p>
           <p className="text-sm text-ink-muted">
-            You only initiate DMs with people within {myDmHops} hop
-            {myDmHops === 1 ? "" : "s"} of you on Circles. Adjust this on the{" "}
-            <Link href="/dms" className="text-brand hover:text-brand-press">
-              DMs tab
-            </Link>{" "}
-            if you want to message them.
+            They only accept DMs from people within {peerGate.theirDmHops} hop
+            {peerGate.theirDmHops === 1 ? "" : "s"} of them on Circles
+            {peerGate.hopsFromMe == null
+              ? ""
+              : ` — you're ${peerGate.hopsFromMe} away`}
+            . Try posting on the wall to get on their radar.
           </p>
         </div>
       ) : (
