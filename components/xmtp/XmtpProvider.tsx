@@ -21,7 +21,15 @@ type Status =
       kind: "ready";
       client: Client;
       inboxId: string;
-      installationId: string;
+      /**
+       * Best-effort identifier for the device's XMTP installation. The
+       * browser SDK exposes this as `string | undefined`; we never reject
+       * a working client just because the property is empty (which would
+       * trigger the WASM bindings to log "Uninitialized identity" to
+       * console.error). Empty/unknown shows up as "—" in the diagnostics
+       * panel.
+       */
+      installationId: string | null;
       /**
        * True when this session came from a fresh `Client.create` rather
        * than a silent `Client.build` reattach. Use it to surface the
@@ -174,17 +182,18 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
           },
         );
         const inboxId = client.inboxId;
-        const installationId = client.installationId;
-        if (!inboxId || !installationId) {
-          console.info(
-            "[xmtp] Client.build returned no inbox or installation id",
-          );
+        if (!inboxId) {
+          console.info("[xmtp] Client.build returned no inbox id");
           return false;
         }
         if (!client.isRegistered) {
           // Local DB is half-built. Drop the marker so the next
           // Enable click runs Client.create from scratch instead of
           // attempting another build on the same stale state.
+          //
+          // Do NOT read installationId before this point — on a half-
+          // built identity the WASM bindings log "Uninitialized identity"
+          // to console.error just from accessing it.
           console.warn(
             "[xmtp] Client.build returned an unregistered identity — clearing marker",
           );
@@ -196,7 +205,7 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
           kind: "ready",
           client,
           inboxId,
-          installationId,
+          installationId: client.installationId ?? null,
           freshInstall: false,
         });
         // Record the inbox→address mapping server-side so peers can reverse
@@ -273,10 +282,9 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
       }
 
       const inboxId = client.inboxId;
-      const installationId = client.installationId;
-      if (!inboxId || !installationId) {
+      if (!inboxId) {
         throw new Error(
-          "XMTP client returned without an inbox or installation ID — initialisation failed silently.",
+          "XMTP client returned without an inbox ID — initialisation failed silently.",
         );
       }
       if (!existingInbox) {
@@ -287,7 +295,7 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
         kind: "ready",
         client,
         inboxId,
-        installationId,
+        installationId: client.installationId ?? null,
         // Client.create produced a fresh installation key under this inbox.
         // Peers won't see this device in their MLS groups until they
         // re-sync — the inbox tab uses this flag to explain why old

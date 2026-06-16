@@ -148,7 +148,7 @@ function XmtpDebugPanel({
   client,
 }: {
   inboxId: string;
-  installationId: string;
+  installationId: string | null;
   freshInstall: boolean;
   client: Client;
 }) {
@@ -186,7 +186,7 @@ function XmtpDebugPanel({
         </div>
         <div className="flex gap-2">
           <dt className="w-32 shrink-0 text-ink-muted">Installation ID</dt>
-          <dd className="break-all font-mono">{installationId}</dd>
+          <dd className="break-all font-mono">{installationId ?? "—"}</dd>
         </div>
         <div className="flex gap-2">
           <dt className="w-32 shrink-0 text-ink-muted">Local DB origin</dt>
