@@ -310,13 +310,28 @@ function XmtpInbox({
 
   if (sorted.length === 0) {
     return (
-      <p className="py-10 text-center text-base text-ink-muted">
-        No conversations yet. Open someone&apos;s profile from the{" "}
-        <Link className="text-brand hover:text-brand-press" href="/people">
-          People
-        </Link>{" "}
-        tab to start one.
-      </p>
+      <div className="space-y-3 py-8">
+        <p className="text-center text-base text-ink-muted">
+          No conversations yet. Open someone&apos;s profile from the{" "}
+          <Link className="text-brand hover:text-brand-press" href="/people">
+            People
+          </Link>{" "}
+          tab to start one.
+        </p>
+        {status.freshInstall && (
+          <div className="mx-auto max-w-prose rounded-[20px] bg-surface p-4 text-sm shadow-card">
+            <p className="font-semibold">Re-enabled XMTP on this device?</p>
+            <p className="mt-1 text-ink-muted">
+              XMTP conversations are stored in this browser. If your local
+              data was cleared (browser eviction, new device, fresh
+              incognito session) we generated a new installation key under
+              your existing inbox. Peers re-welcome your device the next
+              time they open the app — your old conversations will
+              reappear as that happens, not all at once. Nothing is lost.
+            </p>
+          </div>
+        )}
+      </div>
     );
   }
 

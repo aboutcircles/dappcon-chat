@@ -17,7 +17,19 @@ import type { Client } from "@xmtp/browser-sdk";
 type Status =
   | { kind: "idle" }
   | { kind: "initializing" }
-  | { kind: "ready"; client: Client; inboxId: string }
+  | {
+      kind: "ready";
+      client: Client;
+      inboxId: string;
+      installationId: string;
+      /**
+       * True when this session came from a fresh `Client.create` rather
+       * than a silent `Client.build` reattach. Use it to surface the
+       * "your local DB was wiped, peers will re-welcome you as they come
+       * online" hint instead of leaving users staring at an empty inbox.
+       */
+      freshInstall: boolean;
+    }
   | { kind: "error"; message: string };
 
 type XmtpEnv = "dev" | "production" | "local";
@@ -47,6 +59,27 @@ const XmtpContext = createContext<ContextValue>({
 
 function inboxKey(address: string): string {
   return `xmtp-inbox-${address.toLowerCase()}`;
+}
+
+/**
+ * Ask the browser to mark our origin's storage as "persistent" so the
+ * OPFS DB holding XMTP state isn't eligible for routine eviction
+ * (Chrome/Firefox honour this for engaged origins; Safari often denies
+ * but the call is harmless either way). Fire-and-forget — never blocks
+ * the enable flow on the answer.
+ */
+async function requestPersistentStorage(): Promise<void> {
+  if (typeof navigator === "undefined") return;
+  if (!navigator.storage?.persist) return;
+  try {
+    const granted = await navigator.storage.persist();
+    console.info(
+      "[xmtp] persistent storage:",
+      granted ? "granted" : "denied (best-effort eviction still applies)",
+    );
+  } catch (err) {
+    console.warn("[xmtp] persist() failed:", err);
+  }
 }
 
 /**
@@ -141,8 +174,11 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
           },
         );
         const inboxId = client.inboxId;
-        if (!inboxId) {
-          console.info("[xmtp] Client.build returned no inbox id");
+        const installationId = client.installationId;
+        if (!inboxId || !installationId) {
+          console.info(
+            "[xmtp] Client.build returned no inbox or installation id",
+          );
           return false;
         }
         if (!client.isRegistered) {
@@ -156,10 +192,17 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
           return false;
         }
         clientAddressRef.current = addr;
-        setStatus({ kind: "ready", client, inboxId });
+        setStatus({
+          kind: "ready",
+          client,
+          inboxId,
+          installationId,
+          freshInstall: false,
+        });
         // Record the inbox→address mapping server-side so peers can reverse
         // it. Fire-and-forget; not a fatal failure if it 4xxs.
         void registerInboxMapping(addr, inboxId);
+        void requestPersistentStorage();
         return true;
       } catch (err) {
         // Common cause: local OPFS database doesn't exist (cleared browser
@@ -230,17 +273,29 @@ export function XmtpProvider({ children }: { children: ReactNode }) {
       }
 
       const inboxId = client.inboxId;
-      if (!inboxId) {
+      const installationId = client.installationId;
+      if (!inboxId || !installationId) {
         throw new Error(
-          "XMTP client returned without an inbox ID — initialisation failed silently.",
+          "XMTP client returned without an inbox or installation ID — initialisation failed silently.",
         );
       }
       if (!existingInbox) {
         localStorage.setItem(inboxKey(address), inboxId);
       }
       clientAddressRef.current = address;
-      setStatus({ kind: "ready", client, inboxId });
+      setStatus({
+        kind: "ready",
+        client,
+        inboxId,
+        installationId,
+        // Client.create produced a fresh installation key under this inbox.
+        // Peers won't see this device in their MLS groups until they
+        // re-sync — the inbox tab uses this flag to explain why old
+        // conversations may temporarily appear empty.
+        freshInstall: true,
+      });
       void registerInboxMapping(address as `0x${string}`, inboxId);
+      void requestPersistentStorage();
       return true;
     } catch (err) {
       console.error("[xmtp] Client.create failed:", err);

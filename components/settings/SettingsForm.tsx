@@ -9,6 +9,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { useWallet } from "@/components/wallet/WalletProvider";
 import { useXmtp } from "@/components/xmtp/XmtpProvider";
 import { authedFetch } from "@/lib/api";
+import type { Client } from "@xmtp/browser-sdk";
 
 export function SettingsForm() {
   const { address } = useWallet();
@@ -87,6 +88,15 @@ export function SettingsForm() {
         </Button>
       </section>
 
+      {xmtpStatus.kind === "ready" && (
+        <XmtpDebugPanel
+          inboxId={xmtpStatus.inboxId}
+          installationId={xmtpStatus.installationId}
+          freshInstall={xmtpStatus.freshInstall}
+          client={xmtpStatus.client}
+        />
+      )}
+
       <section className="rounded-[20px] bg-surface p-5 shadow-card space-y-3">
         <div>
           <h2 className="text-sm font-semibold text-destructive">
@@ -128,5 +138,79 @@ export function SettingsForm() {
         )}
       </section>
     </div>
+  );
+}
+
+function XmtpDebugPanel({
+  inboxId,
+  installationId,
+  freshInstall,
+  client,
+}: {
+  inboxId: string;
+  installationId: string;
+  freshInstall: boolean;
+  client: Client;
+}) {
+  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  async function forceResync() {
+    setSyncing(true);
+    try {
+      await client.conversations.syncAll();
+      setLastSyncAt(Date.now());
+      toast.success(
+        "Synced. Open the DMs tab — any newly-welcomed conversations will appear.",
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <section className="rounded-[20px] bg-surface p-5 shadow-card space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold">XMTP diagnostics</h2>
+        <p className="text-xs text-ink-muted">
+          Inspect the device-local XMTP state and force a network resync if
+          conversations look stale.
+        </p>
+      </div>
+      <dl className="space-y-1.5 text-xs">
+        <div className="flex gap-2">
+          <dt className="w-32 shrink-0 text-ink-muted">Inbox ID</dt>
+          <dd className="break-all font-mono">{inboxId}</dd>
+        </div>
+        <div className="flex gap-2">
+          <dt className="w-32 shrink-0 text-ink-muted">Installation ID</dt>
+          <dd className="break-all font-mono">{installationId}</dd>
+        </div>
+        <div className="flex gap-2">
+          <dt className="w-32 shrink-0 text-ink-muted">Local DB origin</dt>
+          <dd>
+            {freshInstall
+              ? "freshly created this session — peers re-welcome lazily"
+              : "reattached from existing browser storage"}
+          </dd>
+        </div>
+        <div className="flex gap-2">
+          <dt className="w-32 shrink-0 text-ink-muted">Last force-sync</dt>
+          <dd className="font-mono">
+            {lastSyncAt ? new Date(lastSyncAt).toLocaleTimeString() : "—"}
+          </dd>
+        </div>
+      </dl>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={forceResync}
+        disabled={syncing}
+      >
+        {syncing ? "Syncing…" : "Force resync"}
+      </Button>
+    </section>
   );
 }
