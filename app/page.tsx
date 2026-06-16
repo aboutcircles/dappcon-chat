@@ -43,6 +43,20 @@ export default function LandingPage() {
         <p className="text-base text-ink-muted">Loading your space…</p>
       ) : (
         <div className="space-y-4">
+          <section className="rounded-[20px] border border-brand/30 bg-brand-tint/40 p-5 shadow-card">
+            <p className="text-base font-semibold">
+              Open this in your normal browser
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-ink-muted">
+              Tapped a link from Twitter, Telegram, Slack or another app?
+              You&apos;re in an in-app browser, which can&apos;t do passkey
+              sign-in or persist your DMs reliably. Tap the share/menu icon
+              and choose <span className="font-medium">Open in Safari</span>{" "}
+              or <span className="font-medium">Open in Chrome</span> before
+              signing in.
+            </p>
+          </section>
+
           <section className="rounded-[20px] bg-surface p-6 shadow-card">
             <p className="text-base font-semibold">Already on Circles?</p>
             <p className="mt-2 text-base text-ink-muted">
